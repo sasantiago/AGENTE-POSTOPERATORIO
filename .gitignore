@@ -1,0 +1,10 @@
+# LibreOffice/OpenOffice lock files — embed local username and LAN IP of whoever
+# has the spreadsheet open, never useful to commit.
+.~lock.*#
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Claude Code local session config
+.claude/
