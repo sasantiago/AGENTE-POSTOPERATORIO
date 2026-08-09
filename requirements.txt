@@ -1,0 +1,29 @@
+# Servidor / orquestador
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+websockets==14.1
+
+# LLM / STT (Groq) y Gemini como respaldo documentado
+groq==0.15.0
+google-generativeai==0.8.3
+
+# Ingesta y RAG
+docling==2.15.1
+chromadb==0.6.3
+sentence-transformers==3.3.1
+
+# Vault watcher
+watchdog==6.0.0
+
+# Audio
+soundfile==0.12.1
+numpy==2.2.1
+
+# Utilidades
+httpx==0.28.1
+pandas==2.2.3
+openpyxl==3.1.5
+python-multipart==0.0.20

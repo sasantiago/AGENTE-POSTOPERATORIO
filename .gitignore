@@ -8,3 +8,25 @@ __pycache__/
 
 # Claude Code local session config
 .claude/
+
+# Secretos y entornos locales
+.env
+.env.local
+
+# Python
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Datos generados (índices vectoriales, audio cacheado, vault ingerido)
+data/chroma/
+data/processed/
+voice/fillers/*.wav
+vault/
+*.log
+
+# Node (consola web, si aplica)
+node_modules/
+dist/
