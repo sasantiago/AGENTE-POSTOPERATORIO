@@ -88,13 +88,43 @@ tests/adversarial/        # suite de inyección de prompt y entradas hostiles
 vault/                    # carpeta vigilada (ingesta tipo Obsidian)
 ```
 
-## Métricas (se completa durante el harness — §5 de la rúbrica)
+## Métricas (§5 de la rúbrica)
 
-- Latencia P50 / P95: _pendiente_
-- Tokens in/out por turno y por llamada: _pendiente_
-- Invocaciones al modelo por turno: _pendiente_
-- Consultas RAG por llamada: _pendiente_
-- Costo estimado por llamada: _pendiente_
+Medidas con [`harness/run_eval.py`](harness/run_eval.py) sobre una muestra estratificada
+del dataset — 14 casos (los 12 `rojo` completos + 2 `amarillo`), capa `capa1_limpia`, 84
+turnos de paciente. No se corrió el dataset completo (160 casos × 2 capas ≈ 1 920 turnos)
+porque el tier gratuito de Groq para `llama-3.3-70b-versatile` limita a **100,000
+tokens/día**, y con el consumo medido eso alcanza para ~88 llamadas al LLM, no para el
+total. Detalle y matriz de confusión en [`docs/informe-final.md`](docs/informe-final.md#6-métricas-§5-de-la-rúbrica);
+resultados crudos en [`harness_resultados_rojo_capa1.json`](harness_resultados_rojo_capa1.json).
+
+Reproducir:
+
+```bash
+python -m harness.run_eval --n-rojo -1 --n-amarillo 2 --n-verde 0 --capas capa1_limpia --seed 7
+```
+
+| Métrica | Valor |
+|---|---|
+| Latencia P50 / P95 (orquestación, sin STT/TTS) | 5.24s / 9.91s |
+| Tokens de entrada por turno (media / P50) | 1,070 / 1,084 |
+| Tokens de salida por turno (media / P50) | 79 / 80 |
+| Invocaciones al modelo por turno | 1 (la vía refleja no usa LLM) |
+| Consultas al RAG por llamada | 1 por turno de paciente (4 chunks por consulta) |
+| Costo estimado por llamada (6 turnos) | ≈ USD 0.006 |
+| Falsos negativos catastróficos (rojo real → verde predicho) | 0 / 72 |
+| Recall rojo / amarillo (muestra) | 8.3% / 41.7% — ver nota abajo |
+
+La latencia reportada es la de orquestación pura (reflejo + cortex + fusión + validador),
+sin sumar STT ni TTS — se midió inyectando texto directo al orquestador (`ws://.../ws/llamada`
+acepta un mensaje de texto además de audio, es el mismo bypass que usa el harness).
+
+**Sobre el recall bajo de `rojo`:** ningún turno `rojo` real fue clasificado `verde` (la
+falla catastrófica que penaliza la rúbrica es 0/72), pero el cortex sub-triaja hacia
+`amarillo` en la mayoría de esos turnos en vez de escalar al máximo nivel. Es una
+limitación conocida y documentada, no un número escondido — ver
+[`docs/informe-final.md` §6-7](docs/informe-final.md) para el detalle y el plan de
+corrección (`clinical/reflex_rules.py`).
 
 ## Estado
 

@@ -156,19 +156,33 @@ lo componen:
 ## 6. Métricas (§5 de la rúbrica)
 
 > Medidas contra una muestra estratificada del dataset (no el total), por el límite de
-> tokens/día del tier gratuito descrito en §4. Metodología, tamaño de muestra y comandos
-> de reproducción en el [README](../README.md#métricas).
-
-<!-- TODO: completar esta tabla con harness_resultados_rojo_capa1.json al terminar la corrida -->
+> tokens/día del tier gratuito descrito en §4: 14 casos (los 12 `rojo` completos + 2
+> `amarillo`), capa `capa1_limpia`, 84 turnos de paciente evaluados. Resultados crudos en
+> [`harness_resultados_rojo_capa1.json`](../harness_resultados_rojo_capa1.json);
+> metodología y comando de reproducción en el [README](../README.md#métricas).
 
 | Métrica | Valor |
 |---|---|
-| Latencia P50 / P95 (orquestación, sin STT/TTS) | _pendiente — ver README_ |
-| Tokens de entrada por turno (media) | _pendiente_ |
-| Tokens de salida por turno (media) | _pendiente_ |
+| Latencia P50 / P95 (orquestación, sin STT/TTS) | 5.24s / 9.91s |
+| Tokens de entrada por turno (media / P50) | 1,070 / 1,084 |
+| Tokens de salida por turno (media / P50) | 79 / 80 |
 | Invocaciones al modelo por turno | 1 (la vía refleja no usa LLM) |
 | Consultas al RAG por llamada | 1 por turno de paciente (N_CHUNKS_RAG=4 por consulta) |
-| Costo estimado por llamada | _pendiente — fórmula abajo_ |
+| Costo estimado por llamada (6 turnos) | ≈ USD 0.006 (fórmula y desglose abajo) |
+
+### Lo que dice la matriz de confusión (§4 de la rúbrica: asimetría clínica)
+
+Sobre los 72 turnos de casos `rojo` de la muestra: **0 falsos negativos catastróficos**
+(ningún turno `rojo` real fue clasificado `verde`) — el mecanismo de fusión con veto del
+reflejo (§3) está cumpliendo su función central. Pero el recall de `rojo` puro es bajo
+(8.3%): el sistema sub-triaje hacia `amarillo` en 49/72 turnos en vez de escalar al
+máximo nivel, y declara `desconocida` — honestamente, en vez de inventar — en 17/72. El
+recall de `amarillo` es 41.7% (5/12, sobre una muestra chica de solo 2 casos). El reflejo
+determinista vetó (subió la criticidad del LLM) en 6 de los 84 turnos evaluados.
+
+Lectura honesta: el diseño evita la falla más grave (rojo→verde), pero el cortex es
+conservador prediciendo `amarillo` donde correspondía `rojo`, y `reflex_rules.py` no
+cubre todavía los patrones que llevan a esos 49 casos — ver §7, punto 3.
 
 ### Cómo se calcula el costo estimado por llamada
 
@@ -187,9 +201,16 @@ costo_llamada ≈ n_turnos × [ (tokens_in/1e6 × 0.59) + (tokens_out/1e6 × 0.7
               + minutos_audio_paciente × (0.111/60)
 ```
 
-Con los promedios medidos en el harness (§6) y una llamada típica de 6 turnos de
-paciente, el costo del LLM por llamada es del orden de **centésimas de centavo de dólar**
-— el detalle numérico exacto se completa en el README junto con las métricas finales.
+Con los promedios medidos en el harness (§6) — 1,070 tokens de entrada y 79 de salida por
+turno — y una llamada típica de 6 turnos de paciente:
+
+- LLM: 6 × [(1070/1e6 × 0.59) + (79/1e6 × 0.79)] ≈ **USD 0.0042**
+- STT: 6 turnos al mínimo de facturación de 10s ≈ 1 minuto de audio ≈ **USD 0.0019**
+- **Total ≈ USD 0.006 por llamada** (seis décimas de centavo de dólar).
+
+Es una cota conservadora por abajo: asume utterances del paciente en el mínimo de
+facturación de Whisper (10s); pacientes más locuaces suben el componente de STT, no el de
+LLM (que depende de tokens, no de duración de audio).
 
 ## 7. Trabajo pendiente / qué haría con más tiempo
 
