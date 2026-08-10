@@ -2,22 +2,62 @@
 <html lang="es">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Consola — Agente postoperatorio</title>
+<link rel="stylesheet" href="/webui/static/shared.css" />
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.3rem; }
-  section { margin-bottom: 2rem; border: 1px solid #ccc; padding: 1rem; border-radius: 6px; }
+  body {
+    background: linear-gradient(180deg, var(--cream) 0%, var(--cream-deep) 100%);
+    min-height: 100vh;
+  }
+  .envoltorio { max-width: 920px; margin: 0 auto; padding: 2.2rem 1.4rem 4rem; }
+
+  .encabezado { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+  #orbe-mini { width: 56px; height: 56px; flex-shrink: 0; }
+  .encabezado h1 { font-size: 1.25rem; margin: 0; }
+  .encabezado p { margin: 0.15rem 0 0; color: var(--ink-soft); font-size: 0.88rem; }
+
+  section.tarjeta { padding: 1.5rem 1.6rem; margin-bottom: 1.4rem; }
+  section.tarjeta h2 { margin: 0 0 1rem; font-size: 1.02rem; }
+
+  #form-subida { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+  #form-subida input[type="text"], #form-subida input[type="file"] {
+    padding: 0.55rem 0.8rem; border-radius: 10px; border: 1px solid #d8d3c6;
+    font-family: inherit; font-size: 0.9rem; background: white;
+  }
+  #form-subida button, #btn-refrescar, #btn-inspeccionar {
+    padding: 0.6rem 1.1rem; border: none; border-radius: 10px;
+    background: var(--sage-deep); color: white; font-weight: 600; font-size: 0.88rem;
+  }
+  #btn-refrescar { background: transparent; color: var(--sage-deep); border: 1px solid var(--sage-soft); margin-bottom: 0.9rem; }
+  #estado-subida { font-size: 0.85rem; color: var(--ink-soft); margin: 0.6rem 0 0; }
+
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 0.4rem; border-bottom: 1px solid #eee; font-size: 0.9rem; }
-  button { cursor: pointer; }
-  .chunk { background: #f5f5f5; padding: 0.5rem; margin: 0.4rem 0; border-radius: 4px; font-size: 0.85rem; }
-  #estado-subida { font-size: 0.85rem; color: #555; }
+  th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); padding: 0.4rem 0.5rem; }
+  td { padding: 0.55rem 0.5rem; border-top: 1px solid rgba(0,0,0,0.06); font-size: 0.87rem; }
+  .btn-eliminar { background: none; border: none; color: #a3492f; font-size: 0.82rem; font-weight: 600; padding: 0.3rem 0.6rem; border-radius: 8px; }
+  .btn-eliminar:hover { background: rgba(224, 120, 95, 0.12); }
+
+  #consulta-inspector {
+    width: 65%; padding: 0.6rem 0.9rem; border-radius: 10px; border: 1px solid #d8d3c6;
+    font-family: inherit; font-size: 0.9rem;
+  }
+  .chunk { background: rgba(255,255,255,0.6); padding: 0.7rem 0.9rem; margin: 0.5rem 0; border-radius: 12px; font-size: 0.85rem; line-height: 1.5; border: 1px solid rgba(0,0,0,0.04); }
+  .chunk strong { color: var(--sage-deep); }
 </style>
 </head>
 <body>
-  <h1>Consola de administración — conocimiento clínico</h1>
+<div class="envoltorio">
 
-  <section>
+  <div class="encabezado">
+    <div id="orbe-mini"></div>
+    <div>
+      <h1>Consola de administración</h1>
+      <p>Conocimiento clínico — subir, listar, eliminar, inspeccionar</p>
+    </div>
+  </div>
+
+  <section class="tarjeta glass-card">
     <h2>Subir documento</h2>
     <form id="form-subida">
       <input type="file" id="archivo" required />
@@ -27,7 +67,7 @@
     <p id="estado-subida"></p>
   </section>
 
-  <section>
+  <section class="tarjeta glass-card">
     <h2>Documentos indexados</h2>
     <button id="btn-refrescar">Refrescar</button>
     <table>
@@ -36,12 +76,20 @@
     </table>
   </section>
 
-  <section>
+  <section class="tarjeta glass-card">
     <h2>Inspector — ¿qué sabe el agente sobre X?</h2>
-    <input type="text" id="consulta-inspector" placeholder="Escribe una pregunta clínica..." style="width: 70%" />
+    <input type="text" id="consulta-inspector" placeholder="Escribe una pregunta clínica..." />
     <button id="btn-inspeccionar">Consultar</button>
     <div id="resultados-inspector"></div>
   </section>
+
+</div>
+
+<script type="module">
+import { Orb } from "/webui/static/orb.js";
+const orbeMini = new Orb(document.getElementById("orbe-mini"));
+orbeMini.setState("idle");
+</script>
 
 <script>
 async function refrescarDocumentos() {
@@ -73,7 +121,7 @@ document.getElementById('form-subida').addEventListener('submit', async (e) => {
   formData.append('archivo', archivo);
 
   const estado = document.getElementById('estado-subida');
-  estado.textContent = 'Procesando (Docling + embeddings)...';
+  estado.textContent = 'Procesando (extracción de texto + embeddings)...';
 
   const res = await fetch(`/api/consola/documentos?procedimiento=${encodeURIComponent(procedimiento)}`, {
     method: 'POST',

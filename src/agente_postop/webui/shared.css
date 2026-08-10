@@ -1,0 +1,63 @@
+/* Identidad visual compartida — consola y llamada. Paleta calmada, tipografía suave,
+   pensada para un contexto de salud: nada clínico-frío, nada urgente por defecto. */
+
+:root {
+  --sage: #6fa98a;
+  --sage-soft: #a8d5ba;
+  --sage-deep: #3f6b56;
+  --cream: #f7f5f0;
+  --cream-deep: #ece7dc;
+  --ink: #2b2e2c;
+  --ink-soft: #5b615c;
+  --night: #12181a;
+  --night-soft: #1b2426;
+  --night-card: rgba(255, 255, 255, 0.06);
+  --verde: #81b29a;
+  --amarillo: #e6c26b;
+  --rojo: #e0785f;
+  --radius: 20px;
+  --shadow-soft: 0 8px 30px rgba(20, 30, 25, 0.08);
+  --shadow-glow: 0 0 60px rgba(111, 169, 138, 0.25);
+  font-family: "Sora", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--cream);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-soft);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.badge-verde { background: rgba(129, 178, 154, 0.18); color: var(--sage-deep); }
+.badge-amarillo { background: rgba(230, 194, 107, 0.22); color: #8a6a1f; }
+.badge-rojo { background: rgba(224, 120, 95, 0.2); color: #a3492f; }
+.badge-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+::selection { background: var(--sage-soft); color: var(--ink); }
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+a { color: var(--sage-deep); }

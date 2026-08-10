@@ -31,6 +31,17 @@ app.include_router(console_router)
 DIR_ESTATICOS = Path(__file__).resolve().parents[1] / "console" / "static"
 app.mount("/consola/static", StaticFiles(directory=DIR_ESTATICOS), name="consola-static")
 
+DIR_WEBUI = Path(__file__).resolve().parents[1] / "webui"
+app.mount("/webui/static", StaticFiles(directory=DIR_WEBUI), name="webui-static")
+
+DIR_FILLERS = Path(__file__).resolve().parents[1] / "voice" / "fillers"
+app.mount("/fillers/static", StaticFiles(directory=DIR_FILLERS), name="fillers-static")
+
+
+@app.get("/")
+def interfaz_llamada():
+    return FileResponse(DIR_WEBUI / "llamada.html")
+
 
 @app.get("/consola")
 def consola():
@@ -94,6 +105,7 @@ async def llamada(websocket: WebSocket):
 
             await websocket.send_json(
                 {
+                    "texto_paciente_transcrito": texto_paciente,
                     "respuesta_hablada": resultado.respuesta_hablada,
                     "criticidad_final": resultado.criticidad_final.value,
                     "reflejo_vetea": resultado.reflejo_vetea,
