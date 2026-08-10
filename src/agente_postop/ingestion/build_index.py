@@ -12,6 +12,13 @@ from __future__ import annotations
 import sys
 import time
 
+# La consola de Windows suele quedar en cp1252 — nombres de archivo con caracteres como
+# el guion no separable (U+2011) rompen un print() normal ahí. UTF-8 explícito evita que
+# la indexación se caiga solo por no poder mostrar un nombre de archivo.
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from agente_postop.config import get_settings
 from agente_postop.ingestion.chunking import chunkear_markdown
 from agente_postop.ingestion.docling_pipeline import convertir_a_markdown

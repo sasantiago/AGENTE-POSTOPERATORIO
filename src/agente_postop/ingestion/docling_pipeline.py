@@ -22,7 +22,7 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
-from agente_postop.ingestion.hashing import hash_archivo
+from agente_postop.ingestion.hashing import hash_archivo, ruta_larga
 
 UMBRAL_CHARS_POR_PAGINA = 200  # por debajo de esto, se asume escaneo y se usa Docling+OCR
 
@@ -46,7 +46,7 @@ class DocumentoConvertido:
 def _extraer_texto_digital(ruta: Path) -> str | None:
     """Camino rápido: capa de texto ya embebida en el PDF. Devuelve None si el PDF
     parece un escaneo (muy poco texto por página) y hay que caer a Docling+OCR."""
-    pdf = pdfium.PdfDocument(str(ruta))
+    pdf = pdfium.PdfDocument(ruta_larga(ruta))
     try:
         n_paginas = len(pdf)
         partes = []

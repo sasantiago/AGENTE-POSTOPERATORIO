@@ -8,7 +8,7 @@ from agente_postop.clients import get_groq_client
 from agente_postop.config import get_settings
 
 
-def transcribir(audio_bytes: bytes, nombre_archivo: str = "audio.wav") -> str:
+def transcribir(audio_bytes: bytes, nombre_archivo: str = "audio.webm") -> str:
     settings = get_settings()
     cliente = get_groq_client()
     archivo = io.BytesIO(audio_bytes)
