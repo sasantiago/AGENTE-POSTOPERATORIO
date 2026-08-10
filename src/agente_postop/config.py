@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     vault_dir: Path = Field(default=PROJECT_ROOT / "vault", alias="VAULT_DIR")
     dataset_dir: Path = Field(default=PROJECT_ROOT / "dataset", alias="DATASET_DIR")
 
+    piper_voice_model: Path = Field(
+        default=PROJECT_ROOT / "data" / "voices" / "es_voice.onnx", alias="PIPER_VOICE_MODEL"
+    )
+    fillers_dir: Path = Field(default=PROJECT_ROOT / "src" / "agente_postop" / "voice" / "fillers", alias="FILLERS_DIR")
+
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
     app_port: int = Field(default=8000, alias="APP_PORT")
 

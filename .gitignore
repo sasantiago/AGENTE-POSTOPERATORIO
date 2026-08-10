@@ -20,10 +20,12 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
-# Datos generados (índices vectoriales, audio cacheado, vault ingerido)
+# Datos generados (índices vectoriales, modelo de voz, memoria, vault ingerido)
 data/chroma/
 data/processed/
-voice/fillers/*.wav
+data/voices/
+data/memoria/
+src/agente_postop/voice/fillers/*.wav
 vault/
 *.log
 

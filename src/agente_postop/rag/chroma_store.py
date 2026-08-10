@@ -85,6 +85,14 @@ def chunk_id_existe(chunk_id: str) -> bool:
     return len(resultado.get("ids", [])) > 0
 
 
+def hashes_indexados() -> set[str]:
+    """Todos los hash_contenido ya presentes en la colección — para reanudar una
+    indexación interrumpida sin reprocesar documentos ya hechos."""
+    coleccion = get_coleccion()
+    datos = coleccion.get(include=["metadatas"])
+    return {meta["hash_contenido"] for meta in datos.get("metadatas", [])}
+
+
 def listar_documentos() -> dict[str, dict[str, Any]]:
     """Agrupa metadata por documento — para la consola (listar / inspector)."""
     coleccion = get_coleccion()

@@ -18,12 +18,16 @@ sentence-transformers==3.3.1
 # Vault watcher
 watchdog==6.0.0
 
-# Audio
+# Audio / TTS
 soundfile==0.12.1
 numpy==2.2.1
+piper-tts==1.6.0
 
 # Utilidades
 httpx==0.28.1
 pandas==2.2.3
 openpyxl==3.1.5
 python-multipart==0.0.20
+
+# Pruebas
+pytest==8.3.4
