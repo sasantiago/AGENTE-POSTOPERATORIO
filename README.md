@@ -48,6 +48,14 @@ cp .env.example .env
 # Edita .env y agrega tu GROQ_API_KEY
 ```
 
+Descargar el modelo de voz de Piper (español, ~63 MB, una sola vez):
+
+```bash
+mkdir -p data/voices
+curl -L -o data/voices/es_voice.onnx "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx"
+curl -L -o data/voices/es_voice.onnx.json "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx.json"
+```
+
 Indexar el corpus clínico (una sola vez, o cuando cambie `dataset/textos/`):
 
 ```bash
