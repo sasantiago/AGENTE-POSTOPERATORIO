@@ -76,6 +76,13 @@ async def llamada(websocket: WebSocket):
         while True:
             mensaje = await websocket.receive()
 
+            if mensaje.get("type") == "websocket.disconnect":
+                # receive() no siempre lanza WebSocketDisconnect al desconectar el
+                # cliente (ej. al cerrar la pestaña) — a veces solo devuelve este
+                # mensaje. Si no lo detectamos aquí, el except de abajo nunca corre y
+                # la memoria longitudinal de la llamada no se guarda.
+                raise WebSocketDisconnect
+
             if "bytes" in mensaje and mensaje["bytes"] is not None:
                 texto_paciente = transcribir(mensaje["bytes"])
             elif "text" in mensaje and mensaje["text"] is not None:

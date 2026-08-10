@@ -11,15 +11,20 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from groq import APIConnectionError, APIStatusError
+
 from agente_postop.orchestrator.turn_manager import orquestar_turno
 from harness.reproducer import Caso, procedimiento_de, reconstruir_caso
+
+MAX_REINTENTOS = 3
+ESPERA_BASE_S = 5
 
 
 @dataclass
 class ResultadoEvaluacionTurno:
     caso_id: str
     capa: str
-    dialogo_id: int
+    dialogo_id: str
     turno_idx: int
     texto_paciente: str
     label_ground_truth: str
@@ -39,17 +44,32 @@ def correr_caso(caso: Caso) -> list[ResultadoEvaluacionTurno]:
             continue
 
         inicio = time.perf_counter()
-        resultado = orquestar_turno(
-            turno_paciente=turno.texto,
-            paciente_id=caso.paciente_id,
-            procedimiento=procedimiento,
-            dia_postop=caso.dia_postop,
-            historial_turno="\n".join(historial[-6:]) if historial else "(inicio de la llamada)",
-            sintomas_extraidos=None,
-            es_primer_turno_de_la_llamada=es_primer_turno,
-        )
+        for intento in range(1, MAX_REINTENTOS + 1):
+            try:
+                resultado = orquestar_turno(
+                    turno_paciente=turno.texto,
+                    paciente_id=caso.paciente_id,
+                    procedimiento=procedimiento,
+                    dia_postop=caso.dia_postop,
+                    historial_turno="\n".join(historial[-6:]) if historial else "(inicio de la llamada)",
+                    sintomas_extraidos=None,
+                    es_primer_turno_de_la_llamada=es_primer_turno,
+                )
+                break
+            except (APIConnectionError, APIStatusError) as exc:
+                if intento == MAX_REINTENTOS:
+                    print(f"    turno {turno.turno_idx} omitido tras {MAX_REINTENTOS} intentos: {exc}")
+                    resultado = None
+                    break
+                espera = ESPERA_BASE_S * intento
+                print(f"    turno {turno.turno_idx} falló ({exc}); reintento {intento}/{MAX_REINTENTOS} en {espera}s")
+                time.sleep(espera)
+
         latencia_s = time.perf_counter() - inicio
         es_primer_turno = False
+
+        if resultado is None:
+            continue
 
         historial.append(f"paciente: {turno.texto}")
         historial.append(f"agente: {resultado.respuesta_hablada}")
@@ -74,10 +94,14 @@ def correr_caso(caso: Caso) -> list[ResultadoEvaluacionTurno]:
 def correr_casos(caso_ids: list[str], capa: str) -> list[ResultadoEvaluacionTurno]:
     resultados: list[ResultadoEvaluacionTurno] = []
     for i, caso_id in enumerate(caso_ids, 1):
-        print(f"[{i}/{len(caso_ids)}] {caso_id} ({capa})")
+        print(f"[{i}/{len(caso_ids)}] {caso_id} ({capa})", flush=True)
         try:
             caso = reconstruir_caso(caso_id, capa)
-        except ValueError:
+        except ValueError as exc:
+            print(f"  omitido ({exc})", flush=True)
             continue
-        resultados.extend(correr_caso(caso))
+        try:
+            resultados.extend(correr_caso(caso))
+        except Exception as exc:  # noqa: BLE001 — un caso no debe tumbar todo el run
+            print(f"  caso {caso_id} omitido por error inesperado: {exc}", flush=True)
     return resultados

@@ -17,7 +17,7 @@ from agente_postop.config import get_settings
 
 @dataclass
 class TurnoCaso:
-    dialogo_id: int
+    dialogo_id: str
     turno_idx: int
     hablante: str
     texto: str
@@ -63,7 +63,7 @@ def reconstruir_caso(caso_id: str, capa: str) -> Caso:
     primera = filtrado.iloc[0]
     turnos = [
         TurnoCaso(
-            dialogo_id=int(fila["dialogo_id"]),
+            dialogo_id=str(fila["dialogo_id"]),
             turno_idx=int(fila["turno_idx"]),
             hablante=fila["hablante"],
             texto=fila["texto"],

@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" role="img" aria-label="Arquitectura del agente postoperatorio: dos superficies de navegador contra un orquestador FastAPI+WebSocket, que coordina STT, decision clinica, TTS y memoria; la decision clinica consulta RAG (ChromaDB+BGE-M3) y el LLM Llama 3.3 70B en Groq; una consola de administracion y una carpeta vigilada (vault) alimentan el mismo pipeline de ingesta Docling hacia ChromaDB.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"></path>
+    </marker>
+  </defs>
+  <style>
+    svg { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    text { fill: #1e293b; }
+    .box { fill: #f8fafc; stroke: #1e293b; stroke-width: 1.5; }
+    .box-em { fill: #eef2ff; stroke: #4338ca; stroke-width: 2.5; }
+    .box-actor { fill: #f1f5f9; stroke: #475569; stroke-width: 1.5; stroke-dasharray: 5 3; }
+    .lbl { font-size: 15px; font-weight: 600; }
+    .lbl-sm { font-size: 12px; fill: #475569; }
+    .lbl-em { font-size: 15px; font-weight: 700; fill: #3730a3; }
+    .note { font-size: 11px; fill: #64748b; font-style: italic; }
+    line, polyline { stroke: #334155; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+    .dashed { stroke-dasharray: 6 4; }
+    .arrowhead { fill: #334155; }
+    .edge-lbl { font-size: 12px; fill: #334155; }
+    .edge-bg { fill: #fdfdfd; opacity: 0.9; }
+    .group-lbl { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; fill: #64748b; text-transform: uppercase; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #e2e8f0; }
+      .box { fill: #1e293b; stroke: #cbd5e1; }
+      .box-em { fill: #312e81; stroke: #a5b4fc; }
+      .box-actor { fill: #0f172a; stroke: #94a3b8; }
+      .lbl-sm { fill: #94a3b8; }
+      .lbl-em { fill: #c7d2fe; }
+      .note { fill: #94a3b8; }
+      line, polyline { stroke: #cbd5e1; }
+      .arrowhead { fill: #cbd5e1; }
+      .edge-lbl { fill: #cbd5e1; }
+      .edge-bg { fill: #0b1220; opacity: 0.85; }
+      .group-lbl { fill: #94a3b8; }
+    }
+  </style>
+
+  <!-- ===== Grupo 1: interaccion en vivo ===== -->
+  <text x="40" y="18" class="group-lbl">Llamada en vivo</text>
+
+  <rect x="40" y="30" width="300" height="64" rx="10" class="box"></rect>
+  <text x="190" y="56" text-anchor="middle" class="lbl">Interfaz de llamada</text>
+  <text x="190" y="76" text-anchor="middle" class="lbl-sm">navegador · mic + altavoz</text>
+
+  <rect x="860" y="30" width="300" height="64" rx="10" class="box"></rect>
+  <text x="1010" y="56" text-anchor="middle" class="lbl">Consola de administración</text>
+  <text x="1010" y="76" text-anchor="middle" class="lbl-sm">navegador · subir · listar · eliminar</text>
+
+  <rect x="40" y="150" width="1120" height="56" rx="10" class="box-em"></rect>
+  <text x="600" y="183" text-anchor="middle" class="lbl-em">Orquestador — FastAPI + WebSocket (server.py)</text>
+
+  <line x1="190" y1="94" x2="190" y2="149" class="e"></line>
+  <rect x="118" y="110" width="150" height="18" class="edge-bg"></rect>
+  <text x="193" y="123" text-anchor="middle" class="edge-lbl">audio (ws) / texto</text>
+
+  <line x1="1010" y1="94" x2="1010" y2="149" class="e"></line>
+  <rect x="922" y="110" width="176" height="18" class="edge-bg"></rect>
+  <text x="1010" y="123" text-anchor="middle" class="edge-lbl">REST /api/consola</text>
+
+  <rect x="40" y="260" width="230" height="70" rx="10" class="box"></rect>
+  <text x="155" y="288" text-anchor="middle" class="lbl">STT</text>
+  <text x="155" y="306" text-anchor="middle" class="lbl-sm">Groq Whisper Large V3</text>
+
+  <rect x="330" y="260" width="540" height="70" rx="10" class="box-em"></rect>
+  <text x="600" y="288" text-anchor="middle" class="lbl-em">Decisión clínica — orquestar_turno()</text>
+  <text x="600" y="306" text-anchor="middle" class="lbl-sm">reflejo + cortex + fusión + validador — detalle en Fig. 2</text>
+
+  <rect x="930" y="260" width="230" height="70" rx="10" class="box"></rect>
+  <text x="1045" y="288" text-anchor="middle" class="lbl">TTS</text>
+  <text x="1045" y="306" text-anchor="middle" class="lbl-sm">Piper (local, español)</text>
+
+  <line x1="155" y1="206" x2="155" y2="259" class="e"></line>
+  <rect x="90" y="222" width="130" height="18" class="edge-bg"></rect>
+  <text x="155" y="235" text-anchor="middle" class="edge-lbl">bytes de audio</text>
+
+  <line x1="1045" y1="259" x2="1045" y2="206" class="e"></line>
+  <rect x="980" y="222" width="130" height="18" class="edge-bg"></rect>
+  <text x="1045" y="235" text-anchor="middle" class="edge-lbl">bytes de audio</text>
+
+  <line x1="270" y1="288" x2="329" y2="288" class="e"></line>
+  <rect x="272" y="272" width="58" height="16" class="edge-bg"></rect>
+  <text x="300" y="285" text-anchor="middle" class="edge-lbl" font-size="11">texto</text>
+
+  <line x1="870" y1="284" x2="929" y2="284" class="e"></line>
+  <rect x="868" y="268" width="65" height="16" class="edge-bg"></rect>
+  <text x="900" y="281" text-anchor="middle" class="edge-lbl" font-size="11">respuesta</text>
+
+  <!-- Memoria -->
+  <rect x="330" y="400" width="250" height="70" rx="10" class="box"></rect>
+  <text x="455" y="428" text-anchor="middle" class="lbl">Memoria longitudinal</text>
+  <text x="455" y="446" text-anchor="middle" class="lbl-sm">JSON por paciente</text>
+
+  <line x1="420" y1="330" x2="420" y2="399" class="e"></line>
+  <rect x="426" y="350" width="150" height="16" class="edge-bg"></rect>
+  <text x="500" y="362" text-anchor="middle" class="edge-lbl" font-size="11">guarda resumen (fin de llamada)</text>
+
+  <line x1="480" y1="399" x2="480" y2="330" class="e"></line>
+  <rect x="240" y="350" width="180" height="16" class="edge-bg"></rect>
+  <text x="330" y="362" text-anchor="middle" class="edge-lbl" font-size="11">contexto de apertura (llamada previa)</text>
+
+  <!-- RAG + LLM -->
+  <rect x="650" y="400" width="220" height="70" rx="10" class="box"></rect>
+  <text x="760" y="428" text-anchor="middle" class="lbl">RAG</text>
+  <text x="760" y="446" text-anchor="middle" class="lbl-sm">ChromaDB + BGE-M3</text>
+
+  <rect x="650" y="520" width="220" height="70" rx="10" class="box"></rect>
+  <text x="760" y="548" text-anchor="middle" class="lbl">LLM</text>
+  <text x="760" y="566" text-anchor="middle" class="lbl-sm">Llama 3.3 70B (Groq)</text>
+
+  <line x1="760" y1="330" x2="760" y2="399" class="e"></line>
+  <rect x="675" y="350" width="180" height="16" class="edge-bg"></rect>
+  <text x="765" y="362" text-anchor="middle" class="edge-lbl" font-size="11">consulta(texto) → 4 chunks</text>
+
+  <line x1="760" y1="470" x2="760" y2="519" class="e"></line>
+  <rect x="675" y="484" width="180" height="16" class="edge-bg"></rect>
+  <text x="765" y="496" text-anchor="middle" class="edge-lbl" font-size="11">contexto recuperado</text>
+
+  <polyline points="870,555 950,555 950,300 871,300" class="e"></polyline>
+  <rect x="890" y="380" width="130" height="34" class="edge-bg"></rect>
+  <text x="955" y="393" text-anchor="middle" class="edge-lbl" font-size="11">JSON: criticidad +</text>
+  <text x="955" y="407" text-anchor="middle" class="edge-lbl" font-size="11">afirmaciones con chunk_id</text>
+
+  <!-- ===== Grupo 2: conocimiento vivo ===== -->
+  <text x="40" y="608" class="group-lbl">Conocimiento vivo — G5</text>
+
+  <rect x="40" y="620" width="250" height="64" rx="10" class="box-actor"></rect>
+  <text x="165" y="648" text-anchor="middle" class="lbl">Vault</text>
+  <text x="165" y="666" text-anchor="middle" class="lbl-sm">carpeta vigilada (watcher)</text>
+
+  <rect x="340" y="620" width="300" height="64" rx="10" class="box"></rect>
+  <text x="490" y="646" text-anchor="middle" class="lbl">Docling → Markdown</text>
+  <text x="490" y="664" text-anchor="middle" class="lbl-sm">→ chunking</text>
+
+  <line x1="290" y1="652" x2="339" y2="652" class="e"></line>
+  <rect x="292" y="636" width="46" height="16" class="edge-bg"></rect>
+  <text x="315" y="649" text-anchor="middle" class="edge-lbl" font-size="10">auto</text>
+
+  <polyline points="490,620 490,550 760,550 760,471" class="e"></polyline>
+  <rect x="560" y="533" width="120" height="16" class="edge-bg"></rect>
+  <text x="620" y="546" text-anchor="middle" class="edge-lbl" font-size="11">chunks indexados</text>
+
+  <!-- Consola -> ingesta (tronco) -->
+  <polyline points="1010,94 1180,94 1180,652 641,652" class="e"></polyline>
+  <rect x="1100" y="360" width="16" height="120" class="edge-bg"></rect>
+  <text x="1108" y="420" text-anchor="middle" class="edge-lbl" font-size="11" transform="rotate(90 1108 420)">subir documento</text>
+
+  <polyline points="1180,470 871,470" class="e dashed"></polyline>
+  <rect x="900" y="454" width="230" height="16" class="edge-bg"></rect>
+  <text x="1015" y="466" text-anchor="middle" class="edge-lbl" font-size="11">eliminar → borra chunks (olvida)</text>
+
+  <text x="600" y="760" text-anchor="middle" class="note">
+    Subir/eliminar en la consola y crear/borrar un archivo en el vault siguen el mismo camino: Docling → chunking → ChromaDB.
+  </text>
+</svg>
