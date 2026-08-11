@@ -28,6 +28,7 @@ class MotivoCierre(StrEnum):
     PACIENTE_COLGO = "paciente_colgo"
     ESCALADA_INMEDIATA = "escalada_inmediata"
     ABORTADA_CALIDAD = "abortada_calidad"
+    ERROR_TECNICO = "error_tecnico"
 
 
 class ResumenLlamada(BaseModel):

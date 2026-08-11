@@ -376,6 +376,50 @@ una normalización explícita (`_o_no_evaluado()`) que trata `None` igual que
 `"no_evaluado"` antes de construir el `Observacion`. Verificado con la misma prueba en
 vivo repetida — ver la tabla de la muestra de validación en §6.
 
+### La primera prueba real con micrófono (compuerta G4) encontró cuatro problemas reales
+
+Antes de esta prueba, todo se había validado por el bypass de texto del harness o con
+llamadas manuales al orquestador — nunca por el flujo completo navegador → micrófono →
+WebSocket. La primera prueba en vivo encontró, en orden de aparición:
+
+1. **El modelo de voz de Piper estaba corrupto** — quedó truncado a 28.8MB de los ~63MB
+   esperados, casi seguro por una descarga en background que se cortó durante una
+   interrupción de sesión el día anterior. `onnxruntime` fallaba con `InvalidProtobuf` al
+   cargarlo. Se volvió a descargar completo y se verificó con una síntesis de prueba antes
+   de reintentar.
+2. **Los nombres de procedimiento no coincidían entre la interfaz y el índice del RAG.**
+   El dropdown y `reflex_rules.py` usan nombres clínicos en español ("Apendicectomía",
+   "Mastectomía"...); el índice de ChromaDB usa el nombre de la carpeta de
+   `dataset/textos/` (inglés: "Appendicitis", "breast_cancer"...). El filtro `where` de
+   ChromaDB exige coincidencia exacta, así que **cualquier procedimiento elegido en el
+   demo devolvía el RAG vacío**, sin importar lo que dijera el paciente — el validador de
+   citas habría descartado entonces cada respuesta clínica. Corrección: mapeo explícito en
+   `cortex.py` (`MAPEO_PROCEDIMIENTO_A_CORPUS`) que traduce el nombre clínico a la
+   etiqueta indexada, solo en el punto donde se arma el filtro del RAG — no se tocó
+   `reflex_rules.py` ni el dataset.
+3. **Una excepción sin manejar mataba la conexión del WebSocket en silencio.** Tanto el
+   Piper corrupto como, después, un `RateLimitError` de Groq (cupo diario agotado durante
+   la prueba — ver más abajo) dejaban al paciente esperando una respuesta que nunca iba a
+   llegar, sin ningún mensaje de error. En una sesión de evaluación en vivo esto se lee
+   como "el agente se colgó", no como un límite de cuota. Corrección: `server.py` ahora
+   atrapa el error, sintetiza un mensaje de cierre audible con Piper (sin depender de
+   Groq) y cierra la conexión explícitamente — nunca cuelga en silencio. La memoria de la
+   llamada se guarda igual, con un nuevo `motivo_cierre = error_tecnico`.
+4. **La latencia real (~90s en un turno) resultó de reintentos automáticos del cliente de
+   Groq** (`max_retries=2`, timeout de lectura 60s por defecto) apilados sobre dos
+   llamadas secuenciales por turno, justo cuando el cupo diario ya estaba casi agotado.
+   Corrección doble: se bajó el cliente a 1 reintento / 15s de timeout (falla rápido en
+   vez de reintentar en silencio), y las dos llamadas del turno (extracción y
+   conversación) pasaron a correr **en paralelo** con `ThreadPoolExecutor` en vez de
+   secuenciales — son independientes entre sí dentro de un mismo turno. El costo de esto:
+   la llamada de conversación ya no ve el delta de extracción de ese mismo turno para
+   armar `dimensiones_pendientes` y la desviación de trayectoria, usa el estado de
+   *inicio* del turno — una pérdida de frescura mínima, documentada en el código
+   (`turn_manager.py:_desviaciones_relevantes`), no aplicada en silencio.
+
+Ninguno de los cuatro se hubiera visto corriendo solo el harness por texto — es la
+diferencia concreta entre probar el orquestador y probar la llamada real.
+
 ## Capturas del demo
 
 _Pendiente — se completa con capturas de la interfaz de llamada y la consola en una sesión

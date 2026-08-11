@@ -1,6 +1,6 @@
-"""Un turno completo del paciente: extracción (llamada A) + reflejo + cortex conversacional
-(llamada B) + fusión + validación de citas + SBAR si corresponde, y persistencia en
-memoria si la llamada termina.
+"""Un turno completo del paciente: extracción (llamada A) y conversación (llamada B) en
+paralelo — no dependen la una de la otra dentro del mismo turno — más reflejo, fusión,
+validación de citas y SBAR si corresponde, y persistencia en memoria si la llamada termina.
 
 Este es el punto de integración de los patrones diferenciadores (arco reflejo, gemelo de
 trayectoria, memoria longitudinal, validador de citas, extracción clínica) —
@@ -11,6 +11,7 @@ el harness llama por cada fila del dataset (bypaseando el micrófono).
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from agente_postop.clinical.citation_validator import validar_respuesta
 from agente_postop.clinical.estado import EstadoClinicoLlamada, a_dict_trajectory_twin, fusionar_extraccion
@@ -20,7 +21,7 @@ from agente_postop.clinical.memory import contexto_apertura
 from agente_postop.clinical.models import Criticidad, ResultadoTurno
 from agente_postop.clinical.reflex_engine import evaluar_via_refleja
 from agente_postop.clinical.sbar import construir_sbar
-from agente_postop.clinical.trajectory_twin import comparar, trayectoria_esperada
+from agente_postop.clinical.trajectory_twin import Desviacion, comparar, trayectoria_esperada
 from agente_postop.orchestrator.cortex import extraer_turno, generar_respuesta
 
 logger = logging.getLogger("agente_postop")
@@ -30,6 +31,31 @@ _ACCIONES_POR_CRITICIDAD = {
     Criticidad.AMARILLO: "Se registra su reporte para seguimiento cercano del equipo médico; si algo empeora antes de la próxima llamada, contacte a urgencias.",
     Criticidad.DESCONOCIDA: "No se pudo confirmar toda la información necesaria en esta llamada; se deja registrado para revisión del equipo.",
 }
+
+
+def _desviaciones_relevantes(
+    paciente_id: str, procedimiento: str, dia_postop: int, sintomas: dict, turno_idx: int
+) -> tuple[list[Desviacion], str | None]:
+    if not sintomas:
+        return [], None
+    esperado = trayectoria_esperada(paciente_id, procedimiento, dia_postop)
+    if esperado is None:
+        return [], None
+    try:
+        desviaciones = comparar(sintomas, esperado)
+    except ValueError as exc:
+        logger.warning("comparación de trayectoria falló en turno %s: %s", turno_idx, exc)
+        return [], None
+    relevantes = [d for d in desviaciones if d.empeora]
+    texto = (
+        "; ".join(
+            f"{d.dimension} reportado={d.reportado} (esperado={d.esperado} para el día {dia_postop})"
+            for d in relevantes
+        )
+        if relevantes
+        else None
+    )
+    return desviaciones, texto
 
 
 def orquestar_turno(
@@ -44,45 +70,40 @@ def orquestar_turno(
     es_primer_turno_de_la_llamada: bool = False,
 ) -> ResultadoTurno:
     bandera_reflejo = evaluar_via_refleja(turno_paciente, procedimiento)
-
     contexto_memoria = contexto_apertura(paciente_id) if es_primer_turno_de_la_llamada else None
 
-    # Llamada A — extracción, separada de la conversación (§6 del diseño).
-    try:
-        extraccion_cruda = extraer_turno(turno_paciente=turno_paciente, historial_turno=historial_turno)
-        delta = a_extraccion_turno(extraccion_cruda)
-        fusionar_extraccion(estado_clinico, delta, turno_idx)
-    except Exception as exc:  # noqa: BLE001 — una extracción fallida no debe tumbar el turno
-        logger.warning("extracción de síntomas falló en turno %s: %s", turno_idx, exc)
+    # Snapshot del estado ANTES de este turno — es lo que ve la llamada B, porque corre en
+    # paralelo con la extracción de este mismo turno, no después de ella.
+    dimensiones_pendientes_previas = estado_clinico.dimensiones_pendientes
+    sintomas_previos = a_dict_trajectory_twin(estado_clinico)
+    _, desviaciones_texto_previas = _desviaciones_relevantes(
+        paciente_id, procedimiento, dia_postop, sintomas_previos, turno_idx
+    )
+
+    # Llamada A (extracción) y B (conversación) en paralelo — independientes entre sí
+    # dentro del mismo turno; correrlas una detrás de la otra solo suma latencia.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futuro_extraccion = pool.submit(extraer_turno, turno_paciente=turno_paciente, historial_turno=historial_turno)
+        futuro_conversacion = pool.submit(
+            generar_respuesta,
+            turno_paciente=turno_paciente,
+            procedimiento=procedimiento,
+            contexto_memoria=contexto_memoria,
+            desviaciones_trayectoria=desviaciones_texto_previas,
+            historial_turno=historial_turno,
+            dimensiones_pendientes=dimensiones_pendientes_previas,
+        )
+
+        try:
+            delta = a_extraccion_turno(futuro_extraccion.result())
+            fusionar_extraccion(estado_clinico, delta, turno_idx)
+        except Exception as exc:  # noqa: BLE001 — una extracción fallida no debe tumbar el turno
+            logger.warning("extracción de síntomas falló en turno %s: %s", turno_idx, exc)
+
+        respuesta_cortex = futuro_conversacion.result()  # si falla (ej. rate limit), se propaga — el llamador decide
 
     sintomas_extraidos = a_dict_trajectory_twin(estado_clinico)
-
-    desviaciones_texto = None
-    desviaciones: list = []
-    if sintomas_extraidos:
-        esperado = trayectoria_esperada(paciente_id, procedimiento, dia_postop)
-        if esperado is not None:
-            try:
-                desviaciones = comparar(sintomas_extraidos, esperado)
-            except ValueError as exc:
-                logger.warning("comparación de trayectoria falló en turno %s: %s", turno_idx, exc)
-            else:
-                relevantes = [d for d in desviaciones if d.empeora]
-                if relevantes:
-                    desviaciones_texto = "; ".join(
-                        f"{d.dimension} reportado={d.reportado} (esperado={d.esperado} para el día {dia_postop})"
-                        for d in relevantes
-                    )
-
-    # Llamada B — conversación, con el estado ya fusionado disponible para guiar qué preguntar.
-    respuesta_cortex = generar_respuesta(
-        turno_paciente=turno_paciente,
-        procedimiento=procedimiento,
-        contexto_memoria=contexto_memoria,
-        desviaciones_trayectoria=desviaciones_texto,
-        historial_turno=historial_turno,
-        dimensiones_pendientes=estado_clinico.dimensiones_pendientes,
-    )
+    desviaciones, _ = _desviaciones_relevantes(paciente_id, procedimiento, dia_postop, sintomas_extraidos, turno_idx)
 
     criticidad_final, reflejo_vetea = fusionar(respuesta_cortex.criticidad_propuesta, bandera_reflejo)
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from groq import RateLimitError
 
 from agente_postop.clinical.estado import EstadoClinicoLlamada, comparar_estados
 from agente_postop.clinical.memory import MotivoCierre, ResumenLlamada, guardar_resumen, timestamp_actual, ultimo_resumen
@@ -23,6 +24,15 @@ from agente_postop.console.api import router as console_router
 from agente_postop.orchestrator.turn_manager import orquestar_turno
 from agente_postop.voice.stt_groq import transcribir
 from agente_postop.voice.tts import sintetizar_wav
+
+MENSAJE_CUPO_AGOTADO = (
+    "Se me acabó el tiempo disponible por ahora — alguien del equipo lo va a contactar "
+    "pronto para seguir el control. Muchas gracias por su paciencia."
+)
+MENSAJE_ERROR_TECNICO = (
+    "Uy, tuve un problema técnico justo ahora. Alguien del equipo lo va a llamar para "
+    "continuar el seguimiento. Disculpe la molestia."
+)
 
 logger = logging.getLogger("agente_postop")
 
@@ -63,6 +73,53 @@ class SesionLlamada:
         return "\n".join(self.turnos[-6:]) if self.turnos else "(inicio de la llamada)"
 
 
+def _guardar_memoria_sesion(sesion: SesionLlamada, motivo_cierre: MotivoCierre) -> None:
+    if not sesion.turnos:
+        return
+    anterior = ultimo_resumen(sesion.paciente_id)
+    delta_vs_anterior = comparar_estados(anterior.estado_final, sesion.estado_clinico) if anterior else []
+    if motivo_cierre == MotivoCierre.COMPLETADA and sesion.criticidad_maxima == Criticidad.ROJO:
+        motivo_cierre = MotivoCierre.ESCALADA_INMEDIATA
+    guardar_resumen(
+        ResumenLlamada(
+            paciente_id=sesion.paciente_id,
+            dia_postop=sesion.dia_postop,
+            fecha=timestamp_actual(),
+            estado_final=sesion.estado_clinico,
+            criticidad_final=sesion.criticidad_maxima,
+            alerta_generada=sesion.criticidad_maxima != Criticidad.VERDE,
+            resumen_texto=sesion.historial_texto(),
+            cobertura=sesion.estado_clinico.cobertura,
+            dimensiones_no_evaluadas=sesion.estado_clinico.dimensiones_pendientes,
+            sbar=sesion.ultimo_sbar,
+            delta_vs_llamada_anterior=delta_vs_anterior,
+            motivo_cierre=motivo_cierre,
+        )
+    )
+
+
+async def _cerrar_con_mensaje(websocket: WebSocket, texto_paciente: str, mensaje: str) -> None:
+    """Cierra la llamada con un mensaje audible en vez de matar la conexión en silencio
+    — un error (cupo de Groq agotado, falla técnica) no debe dejar al paciente esperando
+    sin respuesta; hay que colgar avisando, no colgar en silencio."""
+    audio = sintetizar_wav(mensaje)
+    await websocket.send_json(
+        {
+            "texto_paciente_transcrito": texto_paciente,
+            "respuesta_hablada": mensaje,
+            "criticidad_final": Criticidad.DESCONOCIDA.value,
+            "reflejo_vetea": False,
+            "afirmaciones_clinicas": [],
+            "cobertura": 0.0,
+            "verde_bloqueado_por_cobertura": False,
+            "sbar": None,
+            "llamada_finalizada": True,
+        }
+    )
+    await websocket.send_bytes(audio)
+    await websocket.close()
+
+
 @app.websocket("/ws/llamada")
 async def llamada(websocket: WebSocket):
     await websocket.accept()
@@ -97,16 +154,27 @@ async def llamada(websocket: WebSocket):
             turno_idx = len(sesion.turnos) // 2
             sesion.turnos.append(f"paciente: {texto_paciente}")
 
-            resultado = orquestar_turno(
-                turno_paciente=texto_paciente,
-                paciente_id=sesion.paciente_id,
-                procedimiento=sesion.procedimiento,
-                dia_postop=sesion.dia_postop,
-                historial_turno=sesion.historial_texto(),
-                estado_clinico=sesion.estado_clinico,
-                turno_idx=turno_idx,
-                es_primer_turno_de_la_llamada=es_primer_turno,
-            )
+            try:
+                resultado = orquestar_turno(
+                    turno_paciente=texto_paciente,
+                    paciente_id=sesion.paciente_id,
+                    procedimiento=sesion.procedimiento,
+                    dia_postop=sesion.dia_postop,
+                    historial_turno=sesion.historial_texto(),
+                    estado_clinico=sesion.estado_clinico,
+                    turno_idx=turno_idx,
+                    es_primer_turno_de_la_llamada=es_primer_turno,
+                )
+            except RateLimitError:
+                logger.warning("cupo de Groq agotado — cerrando la llamada con aviso, paciente=%s", sesion.paciente_id)
+                await _cerrar_con_mensaje(websocket, texto_paciente, MENSAJE_CUPO_AGOTADO)
+                _guardar_memoria_sesion(sesion, MotivoCierre.ERROR_TECNICO)
+                return
+            except Exception as exc:  # noqa: BLE001 — cualquier falla del turno cuelga avisando, no en silencio
+                logger.exception("error inesperado procesando el turno, paciente=%s: %s", sesion.paciente_id, exc)
+                await _cerrar_con_mensaje(websocket, texto_paciente, MENSAJE_ERROR_TECNICO)
+                _guardar_memoria_sesion(sesion, MotivoCierre.ERROR_TECNICO)
+                return
 
             sesion.turnos.append(f"agente: {resultado.respuesta_hablada}")
             if resultado.criticidad_final.rango > sesion.criticidad_maxima.rango:
@@ -131,29 +199,4 @@ async def llamada(websocket: WebSocket):
             await websocket.send_bytes(audio_respuesta)
 
     except WebSocketDisconnect:
-        if sesion.turnos:
-            anterior = ultimo_resumen(sesion.paciente_id)
-            delta_vs_anterior = (
-                comparar_estados(anterior.estado_final, sesion.estado_clinico) if anterior else []
-            )
-            motivo_cierre = (
-                MotivoCierre.ESCALADA_INMEDIATA
-                if sesion.criticidad_maxima == Criticidad.ROJO
-                else MotivoCierre.COMPLETADA
-            )
-            guardar_resumen(
-                ResumenLlamada(
-                    paciente_id=sesion.paciente_id,
-                    dia_postop=sesion.dia_postop,
-                    fecha=timestamp_actual(),
-                    estado_final=sesion.estado_clinico,
-                    criticidad_final=sesion.criticidad_maxima,
-                    alerta_generada=sesion.criticidad_maxima != Criticidad.VERDE,
-                    resumen_texto=sesion.historial_texto(),
-                    cobertura=sesion.estado_clinico.cobertura,
-                    dimensiones_no_evaluadas=sesion.estado_clinico.dimensiones_pendientes,
-                    sbar=sesion.ultimo_sbar,
-                    delta_vs_llamada_anterior=delta_vs_anterior,
-                    motivo_cierre=motivo_cierre,
-                )
-            )
+        _guardar_memoria_sesion(sesion, MotivoCierre.COMPLETADA)
