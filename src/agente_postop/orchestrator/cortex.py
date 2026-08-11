@@ -23,9 +23,22 @@ from agente_postop.rag.chroma_store import consultar
 
 N_CHUNKS_RAG = 4
 
+# El procedimiento clínico (español — usado por reflex_rules.py, el dataset y el
+# dropdown de la interfaz) no coincide con la etiqueta indexada en ChromaDB (nombre de
+# carpeta de dataset/textos/, en inglés). Sin este mapeo, el filtro `where` del RAG no
+# matchea nunca y toda consulta devuelve vacío — encontrado probando la llamada en vivo.
+MAPEO_PROCEDIMIENTO_A_CORPUS: dict[str, str] = {
+    "Apendicectomía": "Appendicitis",
+    "Colecistectomía": "cholecystitis",
+    "Colectomía": "colorectal cancer",
+    "Reemplazo de cadera/rodilla": "total joint replacement",
+    "Mastectomía": "breast_cancer",
+}
+
 
 def recuperar_contexto_rag(consulta: str, procedimiento: str | None = None) -> str:
-    where = {"procedimiento": procedimiento} if procedimiento else None
+    etiqueta_corpus = MAPEO_PROCEDIMIENTO_A_CORPUS.get(procedimiento, procedimiento) if procedimiento else None
+    where = {"procedimiento": etiqueta_corpus} if etiqueta_corpus else None
     resultado = consultar(consulta, n_resultados=N_CHUNKS_RAG, where=where)
 
     documentos = resultado.get("documents", [[]])[0]
