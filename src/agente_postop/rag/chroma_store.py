@@ -2,21 +2,29 @@
 
 El versionado no es cosmético: sostiene G5 (subir → el agente aprende; eliminar → el
 agente olvida, sin residuo) y el inspector "¿qué sabe el agente sobre X?" de la consola.
+
+La búsqueda es híbrida: vectorial (e5, capta significado) + BM25 (léxica, capta
+coincidencias exactas — dosis, nombres de fármacos, códigos — que un embedding a veces
+difumina). Se combinan con Reciprocal Rank Fusion, no con las dos vías por separado, para
+no tener que normalizar puntajes de escalas distintas (coseno vs. BM25).
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
+from rank_bm25 import BM25Okapi
 
 from agente_postop.config import get_settings
-from agente_postop.rag.embeddings import embeber
+from agente_postop.rag.embeddings import embeber_consulta, embeber_pasajes
 
 NOMBRE_COLECCION = "conocimiento_clinico"
+RRF_K = 60
 
 
 @lru_cache
@@ -46,7 +54,7 @@ def indexar_chunks(chunks: list[ChunkParaIndexar]) -> None:
     if not chunks:
         return
     coleccion = get_coleccion()
-    embeddings = embeber([c.texto for c in chunks])
+    embeddings = embeber_pasajes([c.texto for c in chunks])
     coleccion.upsert(
         ids=[c.chunk_id for c in chunks],
         embeddings=embeddings,
@@ -73,10 +81,61 @@ def eliminar_documento(documento: str) -> int:
     return len(ids)
 
 
-def consultar(texto: str, n_resultados: int = 5, where: dict[str, Any] | None = None):
+def _tokenizar(texto: str) -> list[str]:
+    return re.findall(r"\w+", texto.lower(), flags=re.UNICODE)
+
+
+def _vector_top(texto: str, n: int, where: dict[str, Any] | None) -> list[str]:
+    embedding = embeber_consulta(texto)
     coleccion = get_coleccion()
-    embedding = embeber([texto])[0]
-    return coleccion.query(query_embeddings=[embedding], n_results=n_resultados, where=where)
+    resultado = coleccion.query(query_embeddings=[embedding], n_results=n, where=where)
+    return resultado.get("ids", [[]])[0]
+
+
+def _bm25_top(texto: str, n: int, where: dict[str, Any] | None) -> list[str]:
+    coleccion = get_coleccion()
+    datos = coleccion.get(where=where, include=["documents"])
+    ids = datos.get("ids", [])
+    documentos = datos.get("documents", [])
+    if not ids:
+        return []
+    bm25 = BM25Okapi([_tokenizar(d) for d in documentos])
+    puntajes = bm25.get_scores(_tokenizar(texto))
+    orden = sorted(range(len(ids)), key=lambda i: puntajes[i], reverse=True)[:n]
+    return [ids[i] for i in orden]
+
+
+def consultar(texto: str, n_resultados: int = 5, where: dict[str, Any] | None = None):
+    """Búsqueda híbrida: fusiona el ranking vectorial (e5) y el léxico (BM25) con
+    Reciprocal Rank Fusion — cada uno vota según su posición, no según su puntaje crudo,
+    así no hace falta normalizar escalas incompatibles (coseno vs. BM25)."""
+    n_candidatos = max(n_resultados * 4, 20)
+    ids_vector = _vector_top(texto, n_candidatos, where)
+    ids_bm25 = _bm25_top(texto, n_candidatos, where)
+
+    puntaje_fusionado: dict[str, float] = {}
+    for ranking in (ids_vector, ids_bm25):
+        for rank, chunk_id in enumerate(ranking):
+            puntaje_fusionado[chunk_id] = puntaje_fusionado.get(chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+
+    mejores_ids = sorted(puntaje_fusionado, key=puntaje_fusionado.get, reverse=True)[:n_resultados]
+    if not mejores_ids:
+        return {"documents": [[]], "metadatas": [[]], "ids": [[]], "relevancias": [[]]}
+
+    coleccion = get_coleccion()
+    detalle = coleccion.get(ids=mejores_ids, include=["documents", "metadatas"])
+    por_id = dict(zip(detalle["ids"], zip(detalle["documents"], detalle["metadatas"])))
+
+    documentos_ordenados = [por_id[i][0] for i in mejores_ids if i in por_id]
+    metadatas_ordenadas = [por_id[i][1] for i in mejores_ids if i in por_id]
+    relevancias_ordenadas = [puntaje_fusionado[i] for i in mejores_ids if i in por_id]
+
+    return {
+        "documents": [documentos_ordenados],
+        "metadatas": [metadatas_ordenadas],
+        "ids": [mejores_ids],
+        "relevancias": [relevancias_ordenadas],
+    }
 
 
 def chunk_id_existe(chunk_id: str) -> bool:

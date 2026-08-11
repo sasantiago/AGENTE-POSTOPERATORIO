@@ -16,7 +16,7 @@ Contexto del reto, reglas de evaluación y dataset original: [`docs/reto-origina
 | LLM (razonamiento de la llamada) | Llama 3.3 70B vía Groq | Cumple G3 (familia Meta Llama, nivel gratuito); latencia mínima por LPU |
 | STT | Groq Whisper Large V3 | Mismo proveedor que el LLM, menos saltos de red |
 | TTS | Kokoro-82M / Piper (español) | Local, gratis, sin límite de minutos |
-| RAG | ChromaDB + BGE-M3 | Local, gratis, fuerte en español médico |
+| RAG | ChromaDB + `multilingual-e5-base` (búsqueda híbrida: vectorial + BM25) | Local, gratis; e5-base (~1.1GB) en vez de BGE-M3 (4.3GB) para no comprometer la compuerta de 15 minutos — BM25 recupera el margen de precisión en términos exactos (dosis, fármacos) que un embedding más chico puede difuminar |
 | Ingesta | Docling | Un solo camino a Markdown para cualquier archivo, con OCR |
 | Orquestación | FastAPI + WebSocket | Streaming bidireccional de audio y turnos |
 
@@ -56,7 +56,16 @@ curl -L -o data/voices/es_voice.onnx "https://huggingface.co/rhasspy/piper-voice
 curl -L -o data/voices/es_voice.onnx.json "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx.json"
 ```
 
-Indexar el corpus clínico (una sola vez, o cuando cambie `dataset/textos/`):
+**El índice de ChromaDB ya viene construido y comiteado en `data/chroma/`** — no hace
+falta indexar los 107 PDFs de `dataset/textos/` para levantar la solución (con Docling en
+CPU eso toma del orden de una hora; hacerlo parte del arranque documentado habría roto la
+compuerta de los 15 minutos). Lo único que se descarga en el primer arranque es el modelo
+de embeddings `intfloat/multilingual-e5-base` (~1.1GB, vía `sentence-transformers`, se
+cachea en `~/.cache/huggingface`) — mismo que se usó para construir el índice comiteado,
+así que los vectores siguen siendo compatibles.
+
+Si vas a **agregar o refrescar conocimiento** (no hace falta para levantar la demo, es
+para cuando cambie el corpus):
 
 ```bash
 python -m agente_postop.ingestion.build_index
@@ -78,7 +87,7 @@ src/agente_postop/
 ├── config.py           # variables de entorno, rutas
 ├── clients.py           # cliente Groq
 ├── ingestion/            # Docling → Markdown → chunking → ChromaDB
-├── rag/                  # embeddings BGE-M3, recuperación
+├── rag/                  # embeddings e5-base, recuperación híbrida (vectorial + BM25)
 ├── voice/                # STT, TTS, fillers cacheados
 ├── clinical/             # arco reflejo, gemelo de trayectoria, memoria, SBAR, validador de citas
 ├── orchestrator/         # FastAPI + WebSocket, gestor de turno

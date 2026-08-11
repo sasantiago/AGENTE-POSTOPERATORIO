@@ -20,8 +20,9 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
-# Datos generados (índices vectoriales, modelo de voz, memoria, vault ingerido)
-data/chroma/
+# Datos generados (modelo de voz, memoria, vault ingerido)
+# data/chroma/ NO se ignora — el índice viene pre-construido y comiteado (ver README,
+# sección de instalación: blinda la compuerta de arranque en ≤15 minutos, G2).
 data/processed/
 data/voices/
 data/memoria/

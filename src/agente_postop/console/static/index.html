@@ -141,7 +141,7 @@ document.getElementById('btn-inspeccionar').addEventListener('click', async () =
   const data = await res.json();
   const div = document.getElementById('resultados-inspector');
   div.innerHTML = data.resultados.length
-    ? data.resultados.map(r => `<div class="chunk"><strong>${r.documento}</strong> (${r.chunk_id}, distancia=${r.distancia.toFixed(3)})<br>${r.texto.slice(0, 300)}...</div>`).join('')
+    ? data.resultados.map(r => `<div class="chunk"><strong>${r.documento}</strong> (${r.chunk_id}, relevancia=${r.relevancia.toFixed(3)})<br>${r.texto.slice(0, 300)}...</div>`).join('')
     : '<p>Sin resultados — el agente no tiene información sobre eso.</p>';
 });
 

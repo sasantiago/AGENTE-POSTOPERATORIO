@@ -73,7 +73,7 @@ def inspeccionar(consulta: str, n: int = 5):
     documentos = resultado.get("documents", [[]])[0]
     metadatas = resultado.get("metadatas", [[]])[0]
     ids = resultado.get("ids", [[]])[0]
-    distancias = resultado.get("distances", [[]])[0]
+    relevancias = resultado.get("relevancias", [[]])[0]
 
     return {
         "consulta": consulta,
@@ -83,8 +83,8 @@ def inspeccionar(consulta: str, n: int = 5):
                 "documento": meta["documento"],
                 "procedimiento": meta["procedimiento"],
                 "texto": texto,
-                "distancia": distancia,
+                "relevancia": relevancia,
             }
-            for chunk_id, texto, meta, distancia in zip(ids, documentos, metadatas, distancias)
+            for chunk_id, texto, meta, relevancia in zip(ids, documentos, metadatas, relevancias)
         ],
     }

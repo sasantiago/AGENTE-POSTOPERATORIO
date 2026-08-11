@@ -54,8 +54,23 @@ funcionamiento interno está detallado en el diagrama de flujo de decisión (§3
 Subir un documento desde la consola, o dejar caer un archivo en la carpeta `vault/`
 vigilada, sigue el mismo camino: Docling lo convierte a Markdown (con fallback OCR para
 PDFs escaneados sin capa de texto), se trocea, y se indexa en ChromaDB con embeddings
-BGE-M3. Eliminar el documento borra sus chunks del índice — el agente lo olvida en la
-siguiente consulta, sin reiniciar el servidor.
+`multilingual-e5-base`. Eliminar el documento borra sus chunks del índice — el agente lo
+olvida en la siguiente consulta, sin reiniciar el servidor.
+
+**Por qué `multilingual-e5-base` y no BGE-M3** (que era la elección inicial, sugerida en
+`stack-tecnico.md`): BGE-M3 pesa 4.3GB y `sentence-transformers` lo descarga de Hugging
+Face la primera vez que se usa — no solo al construir el índice, sino en **cada consulta
+en vivo**, porque la pregunta del paciente también se embebe con el mismo modelo. En una
+máquina fresca del jurado, esa descarga por sí sola amenaza la compuerta G2 (≤15 minutos).
+`multilingual-e5-base` pesa ~1.1GB — cuatro veces menos — y para compensar la posible
+pérdida de precisión frente a un embedding más grande, la búsqueda es **híbrida**: se
+combina el ranking vectorial (e5) con BM25 léxico (`rank_bm25`, sin modelo que descargar)
+usando Reciprocal Rank Fusion. La ventaja concreta de sumar BM25: un embedding puede
+"difuminar" semánticamente un término médico exacto (una dosis, el nombre de un fármaco,
+un código), mientras que BM25 lo encuentra por coincidencia literal — las dos vías se
+complementan en vez de competir. El índice de ChromaDB ya construido se comitea al
+repositorio (`data/chroma/`), así que el arranque real no depende de reprocesar los 107
+PDFs del corpus — ver §4 para el detalle del presupuesto de tiempo.
 
 ## 3. Lógica de decisión y escalamiento
 
@@ -84,15 +99,36 @@ paciente a personal médico. Esto hace la alucinación estructuralmente imposibl
 pronunciar — no es una instrucción de prompt que el modelo pueda ignorar, es un chequeo
 fuera del LLM.
 
-El **gemelo de trayectoria** (`clinical/trajectory_twin.py`) compara los síntomas
-extraídos contra `trayectorias_postop_silver.xlsx` (paciente conocido) o, si el paciente no
-está en el dataset de referencia, contra el promedio del arquetipo `recuperacion_normal`
-para ese procedimiento y día — así un dolor reportado se juzga contra lo esperado para el
-día postoperatorio actual, no en el vacío.
+El **gemelo de trayectoria** (`clinical/trajectory_twin.py`) está diseñado para comparar
+los síntomas extraídos contra `trayectorias_postop_silver.xlsx` (paciente conocido) o,
+si el paciente no está en el dataset de referencia, contra el promedio del arquetipo
+`recuperacion_normal` para ese procedimiento y día — así un dolor reportado se juzgaría
+contra lo esperado para el día postoperatorio actual, no en el vacío. **Está diseñado**
+porque, igual que el SBAR (ver abajo), hoy no corre con datos reales — ver la limitación
+conocida más abajo.
 
 La **memoria longitudinal** (`clinical/memory.py`) persiste un resumen JSON por paciente al
 cerrar cada llamada; la siguiente llamada lo carga como contexto de apertura, para que el
 agente pueda referirse a lo que el paciente reportó la vez anterior.
+
+### Limitación conocida: la extracción de síntomas no existe — `trajectory_twin` es código muerto
+
+`orquestar_turno()` recibe `sintomas_extraidos: dict | None`, y ese parámetro está
+**hardcodeado a `None`** en las dos únicas rutas que lo invocan: `orchestrator/server.py`
+(la llamada real) y `harness/runner.py` (la evaluación). El LLM nunca extrae dolor, fiebre,
+movilidad, herida, apetito o sueño como datos estructurados — solo decide `criticidad_propuesta`
+y cita afirmaciones clínicas del RAG. Consecuencia directa: `trajectory_twin.comparar()`
+jamás se ejecuta con datos reales, `sesion.sintomas_reportados` queda siempre en `{}`, y el
+SBAR (ver abajo) imprimiría "Síntomas reportados: {}" si se conectara tal cual está.
+
+Es la brecha más importante del proyecto — más que el SBAR, porque el gemelo de trayectoria
+es uno de los diferenciadores centrales del diseño (§1) y hoy no aporta nada al
+razonamiento real. Hay un documento de diseño completo para resolverlo
+(`docs/diseno-esquema-extraccion.md`): un esquema `Observacion[T]` con estado epistémico
+explícito (para que "no le pregunté" nunca se confunda con "respondió normal"), una
+llamada de extracción separada de la conversación, y una regla de fusión que solo permite
+escalar en severidad dentro de una llamada. Ver §7 para la decisión de alcance tomada en
+esta entrega.
 
 ### Limitación conocida: SBAR no conectado al loop en vivo
 
@@ -216,16 +252,27 @@ LLM (que depende de tokens, no de duración de audio).
 
 En orden de prioridad:
 
+0. **Implementar la extracción real de síntomas** (`docs/diseno-esquema-extraccion.md`) —
+   es la brecha de mayor impacto: sin ella, `trajectory_twin` no puede correr con datos
+   reales y el SBAR del punto 1 saldría con `sintomas_reportados={}`. Decisión tomada para
+   esta entrega: documentar el gap con honestidad en vez de implementar bajo presión de
+   tiempo el día de entrega — el diseño completo queda listo para ejecutarse después.
 1. **Conectar `construir_sbar()` a `turn_manager.py`** cuando `criticidad_final` sea
-   `amarillo` o `rojo` — es la brecha más visible entre lo implementado y lo que pide la
-   rúbrica (§4, registro de la alerta).
+   `amarillo` o `rojo` — depende del punto 0 para no salir vacío; es la brecha más visible
+   entre lo implementado y lo que pide la rúbrica (§4, registro de la alerta).
 2. **Correr el harness completo (160 casos × 2 capas)** en cuanto el presupuesto de
    tokens/día lo permita, en vez de la muestra estratificada usada para este informe.
 3. **Investigar el recall bajo en `rojo`** observado en la muestra inicial — el reflejo
    determinista no está capturando todos los patrones que el LLM subestima; requiere
    revisar `clinical/reflex_rules.py` contra los casos rojo que fallaron.
-4. Endurecer el arranque en ≤15 minutos (compuerta G2) con una prueba de instalación limpia
-   de punta a punta en una máquina sin el entorno preconfigurado.
+4. ~~Endurecer el arranque en ≤15 minutos (compuerta G2) con una prueba de instalación
+   limpia de punta a punta en una máquina sin el entorno preconfigurado.~~ **Hecho durante
+   la construcción** — ver §8: la prueba de instalación limpia encontró dos riesgos reales
+   contra G2 (reindexado completo del corpus, tamaño del modelo de embeddings) y ambos se
+   corrigieron antes de la entrega, no quedaron como hallazgo sin resolver.
+5. Medir en la práctica el tiempo de arranque en limpio con el índice ya comiteado
+   (`git clone` → `uvicorn`, sin `build_index`) para tener un número real de G2, no solo la
+   expectativa de diseño.
 
 ## 8. Evidencia del proceso con IA
 
@@ -240,6 +287,26 @@ harness: `reproducer.py` intentaba convertir `dialogo_id` — un identificador d
 capturado en silencio por un `except` demasiado amplio en `runner.py`, dando "0 turnos
 evaluados" sin ningún error visible. La corrección (`dialogo_id: str` en vez de `int`, y el
 `except` ahora imprime la causa) está en el historial de commits de esta fecha.
+
+También durante el día 2, y en gran parte gracias a haber tenido que clonar el repositorio
+en una carpeta nueva por un problema de espacio en OneDrive, se ejecutó sin querer la
+primera prueba real de instalación limpia (venv nuevo, sin caché, sin `data/` previo) —
+justo lo que pedía el punto 4 de §7. Esa prueba encontró dos riesgos concretos contra la
+compuerta G2 que no eran visibles trabajando siempre sobre el mismo entorno ya
+preparado:
+
+- **El reindexado completo de los 107 PDFs con Docling en CPU toma del orden de una
+  hora** — inviable como parte del arranque documentado en el README. Corrección: el
+  índice de ChromaDB ya construido se comitea al repositorio (`data/chroma/`); el README
+  ya no le pide al jurado reindexar, solo cargar lo ya calculado.
+- **El modelo de embeddings original (BGE-M3) pesa 4.3GB y se descarga de Hugging Face
+  también en cada consulta en vivo**, no solo al indexar — un riesgo serio contra los 15
+  minutos en una máquina sin el modelo cacheado. Corrección: se cambió a
+  `multilingual-e5-base` (~1.1GB) y se compensó la posible pérdida de precisión sumando
+  búsqueda léxica BM25 en paralelo a la vectorial (Reciprocal Rank Fusion) — ver §2.
+
+Ninguno de los dos hallazgos se dejó como nota al margen: ambos se corrigieron en el
+código antes de esta versión del informe.
 
 ## Capturas del demo
 
