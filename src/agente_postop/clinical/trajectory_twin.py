@@ -131,8 +131,17 @@ def comparar(reportado: dict, esperado: CuadroEsperado) -> list[Desviacion]:
         ("sueno", ORDEN_SUENO),
     ):
         if dimension in reportado:
-            valor_reportado = orden.get(reportado[dimension], 0)
-            valor_esperado = orden.get(getattr(esperado, dimension), 0)
+            # Fallar ruidoso, no silencioso: un literal que no está en la tabla no es
+            # "normal" (antes: `.get(x, 0)` degradaba en silencio a 0=normal, que en un
+            # agente clínico es la peor dirección de fallo posible — ver §1.2b del diseño).
+            try:
+                valor_reportado = orden[reportado[dimension]]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Valor no reconocido para '{dimension}': {reportado[dimension]!r} "
+                    f"(válidos: {list(orden)})"
+                ) from exc
+            valor_esperado = orden[getattr(esperado, dimension)]
             desviaciones.append(
                 Desviacion(
                     dimension,

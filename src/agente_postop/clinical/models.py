@@ -57,6 +57,13 @@ class BanderaRefleja(BaseModel):
     documento_sustento: str | None = None
 
 
+class SBAR(BaseModel):
+    situacion: str
+    contexto: str
+    evaluacion: str
+    recomendacion: str
+
+
 class ResultadoTurno(BaseModel):
     respuesta_hablada: str
     criticidad_final: Criticidad
@@ -64,10 +71,6 @@ class ResultadoTurno(BaseModel):
     criticidad_cortical: Criticidad
     reflejo_vetea: bool
     afirmaciones_clinicas: list[AfirmacionClinica]
-
-
-class SBAR(BaseModel):
-    situacion: str
-    contexto: str
-    evaluacion: str
-    recomendacion: str
+    cobertura: float = 0.0
+    verde_bloqueado_por_cobertura: bool = False
+    sbar: SBAR | None = None

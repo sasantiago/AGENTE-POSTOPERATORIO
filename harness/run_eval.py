@@ -129,6 +129,7 @@ def main() -> None:
                 "criticidad_predicha": r.criticidad_predicha,
                 "reflejo_vetea": r.reflejo_vetea,
                 "latencia_s": r.latencia_s,
+                "cobertura": r.cobertura,
             }
             for r in todos_resultados
         ],

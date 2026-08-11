@@ -1,0 +1,135 @@
+{
+  "n_casos": 1,
+  "capas": [
+    "capa1_limpia"
+  ],
+  "n_turnos": 6,
+  "matriz_confusion": {
+    "verde": {
+      "verde": 0,
+      "amarillo": 0,
+      "rojo": 0,
+      "desconocida": 0
+    },
+    "amarillo": {
+      "verde": 0,
+      "amarillo": 0,
+      "rojo": 0,
+      "desconocida": 0
+    },
+    "rojo": {
+      "verde": 0,
+      "amarillo": 1,
+      "rojo": 1,
+      "desconocida": 4
+    }
+  },
+  "recall_por_nivel": {
+    "verde": NaN,
+    "amarillo": NaN,
+    "rojo": 0.16666666666666666
+  },
+  "falsos_negativos_rojo": 0,
+  "latencia_p50_p95_s": [
+    3.397554750001291,
+    15.632422700000461
+  ],
+  "tokens_entrada": [
+    1428,
+    946,
+    1482,
+    997,
+    1531,
+    1042,
+    1599,
+    1107,
+    1606,
+    1110,
+    1614,
+    1076
+  ],
+  "tokens_salida": [
+    386,
+    65,
+    384,
+    61,
+    391,
+    63,
+    379,
+    65,
+    377,
+    68,
+    373,
+    68
+  ],
+  "n_invocaciones_llm": 12,
+  "duracion_total_s": 34.408581600000616,
+  "resultados": [
+    {
+      "caso_id": "caso_tray_pac_42_00017_7",
+      "capa": "capa1_limpia",
+      "dialogo_id": "dlg_caso_tray_pac_42_00017_7_1",
+      "turno_idx": 1,
+      "label_ground_truth": "rojo",
+      "criticidad_predicha": "desconocida",
+      "reflejo_vetea": false,
+      "latencia_s": 8.622814000002109,
+      "cobertura": 0.16666666666666666
+    },
+    {
+      "caso_id": "caso_tray_pac_42_00017_7",
+      "capa": "capa1_limpia",
+      "dialogo_id": "dlg_caso_tray_pac_42_00017_7_3",
+      "turno_idx": 3,
+      "label_ground_truth": "rojo",
+      "criticidad_predicha": "desconocida",
+      "reflejo_vetea": false,
+      "latencia_s": 1.5438447000051383,
+      "cobertura": 0.3333333333333333
+    },
+    {
+      "caso_id": "caso_tray_pac_42_00017_7",
+      "capa": "capa1_limpia",
+      "dialogo_id": "dlg_caso_tray_pac_42_00017_7_5",
+      "turno_idx": 5,
+      "label_ground_truth": "rojo",
+      "criticidad_predicha": "desconocida",
+      "reflejo_vetea": false,
+      "latencia_s": 1.7860893000033684,
+      "cobertura": 0.5
+    },
+    {
+      "caso_id": "caso_tray_pac_42_00017_7",
+      "capa": "capa1_limpia",
+      "dialogo_id": "dlg_caso_tray_pac_42_00017_7_7",
+      "turno_idx": 7,
+      "label_ground_truth": "rojo",
+      "criticidad_predicha": "rojo",
+      "reflejo_vetea": true,
+      "latencia_s": 1.7577729999902658,
+      "cobertura": 0.6666666666666666
+    },
+    {
+      "caso_id": "caso_tray_pac_42_00017_7",
+      "capa": "capa1_limpia",
+      "dialogo_id": "dlg_caso_tray_pac_42_00017_7_9",
+      "turno_idx": 9,
+      "label_ground_truth": "rojo",
+      "criticidad_predicha": "desconocida",
+      "reflejo_vetea": false,
+      "latencia_s": 5.009020199999213,
+      "cobertura": 0.8333333333333334
+    },
+    {
+      "caso_id": "caso_tray_pac_42_00017_7",
+      "capa": "capa1_limpia",
+      "dialogo_id": "dlg_caso_tray_pac_42_00017_7_11",
+      "turno_idx": 11,
+      "label_ground_truth": "rojo",
+      "criticidad_predicha": "amarillo",
+      "reflejo_vetea": false,
+      "latencia_s": 15.632422700000461,
+      "cobertura": 1.0
+    }
+  ]
+}

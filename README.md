@@ -89,7 +89,7 @@ src/agente_postop/
 ├── ingestion/            # Docling → Markdown → chunking → ChromaDB
 ├── rag/                  # embeddings e5-base, recuperación híbrida (vectorial + BM25)
 ├── voice/                # STT, TTS, fillers cacheados
-├── clinical/             # arco reflejo, gemelo de trayectoria, memoria, SBAR, validador de citas
+├── clinical/             # extracción, estado de la llamada, arco reflejo, gemelo de trayectoria, memoria, SBAR, validador de citas
 ├── orchestrator/         # FastAPI + WebSocket, gestor de turno
 └── console/               # consola de administración (subir/listar/eliminar)
 harness/                  # evaluación contra dataset_final.xlsx
@@ -99,12 +99,18 @@ vault/                    # carpeta vigilada (ingesta tipo Obsidian)
 
 ## Métricas (§5 de la rúbrica)
 
+> **Nota de arquitectura:** la tabla de abajo se midió *antes* de activar la extracción de
+> síntomas (1 llamada al LLM por turno). Con la extracción activa (arquitectura actual, 2
+> llamadas por turno: extracción + conversación) los tokens y la latencia suben — ver la
+> muestra de validación en [`docs/informe-final.md` §6](docs/informe-final.md#6-métricas-§5-de-la-rúbrica).
+
 Medidas con [`harness/run_eval.py`](harness/run_eval.py) sobre una muestra estratificada
 del dataset — 14 casos (los 12 `rojo` completos + 2 `amarillo`), capa `capa1_limpia`, 84
 turnos de paciente. No se corrió el dataset completo (160 casos × 2 capas ≈ 1 920 turnos)
 porque el tier gratuito de Groq para `llama-3.3-70b-versatile` limita a **100,000
-tokens/día**, y con el consumo medido eso alcanza para ~88 llamadas al LLM, no para el
-total. Detalle y matriz de confusión en [`docs/informe-final.md`](docs/informe-final.md#6-métricas-§5-de-la-rúbrica);
+tokens/día**, y con el consumo medido eso alcanza para ~88 llamadas al LLM (~44 turnos con
+la arquitectura actual de 2 llamadas/turno), no para el total. Detalle y matriz de
+confusión en [`docs/informe-final.md`](docs/informe-final.md#6-métricas-§5-de-la-rúbrica);
 resultados crudos en [`harness_resultados_rojo_capa1.json`](harness_resultados_rojo_capa1.json).
 
 Reproducir:
@@ -118,9 +124,9 @@ python -m harness.run_eval --n-rojo -1 --n-amarillo 2 --n-verde 0 --capas capa1_
 | Latencia P50 / P95 (orquestación, sin STT/TTS) | 5.24s / 9.91s |
 | Tokens de entrada por turno (media / P50) | 1,070 / 1,084 |
 | Tokens de salida por turno (media / P50) | 79 / 80 |
-| Invocaciones al modelo por turno | 1 (la vía refleja no usa LLM) |
+| Invocaciones al modelo por turno | 1 (la vía refleja no usa LLM; **ahora son 2**, ver nota arriba) |
 | Consultas al RAG por llamada | 1 por turno de paciente (4 chunks por consulta) |
-| Costo estimado por llamada (6 turnos) | ≈ USD 0.006 |
+| Costo estimado por llamada (6 turnos) | ≈ USD 0.006 (≈ USD 0.0076 con la arquitectura actual) |
 | Falsos negativos catastróficos (rojo real → verde predicho) | 0 / 72 |
 | Recall rojo / amarillo (muestra) | 8.3% / 41.7% — ver nota abajo |
 

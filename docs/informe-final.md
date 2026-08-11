@@ -45,9 +45,11 @@ una consulta dada).
 
 Cada turno de voz sigue el camino: audio → STT (Groq Whisper Large V3) → texto →
 `orquestar_turno()` → texto de respuesta → TTS (Piper, local) → audio. `orquestar_turno()`
-es el punto de integración de los cuatro patrones diferenciadores del diseño: arco
-reflejo, gemelo de trayectoria, memoria longitudinal y validador de citas — su
-funcionamiento interno está detallado en el diagrama de flujo de decisión (§3).
+es el punto de integración de los cinco patrones diferenciadores del diseño: extracción
+clínica estructurada, arco reflejo, gemelo de trayectoria, memoria longitudinal y
+validador de citas — su funcionamiento interno está detallado en el diagrama de flujo de
+decisión (§3). Cada turno hace **dos llamadas al LLM**, no una: extracción (qué dijo el
+paciente, tipado) y conversación (qué se le responde) — separadas a propósito, ver §3.
 
 ### Conocimiento vivo (compuerta G5)
 
@@ -76,69 +78,78 @@ PDFs del corpus — ver §4 para el detalle del presupuesto de tiempo.
 
 ![Flujo de decisión por turno](diagrama-flujo-decision.svg)
 
-Cada turno del paciente se evalúa por **dos vías en paralelo**:
+Cada turno del paciente pasa por **extracción y decisión**, en ese orden:
 
+- **Extracción** (`clinical/extraction.py` + `orchestrator/cortex.extraer_turno()`) —
+  llamada A al LLM, separada de la conversación (temperature 0.1, sin RAG: es una tarea
+  cerrada de lectura). El LLM devuelve, para ese turno únicamente, dolor/fiebre/movilidad/
+  herida/apetito/sueño con un **estado epistémico** explícito (`no_preguntado` ·
+  `preguntado_sin_respuesta` · `ambiguo` · `rechazado` · `no_medible` · `confirmado`), más
+  seis banderas rojas como `TriEstado` (`presente`/`ausente`/`no_evaluado`, nunca `bool`),
+  y quién habló (paciente/tercero/inferido). El acumulador determinista
+  (`clinical/estado.py:fusionar_extraccion()`) fusiona ese delta contra el estado vivo de
+  la llamada: el estado **solo escala en severidad** — si el paciente reporta dolor 8 y
+  diez turnos después dice "ya estoy mejor", el máximo de la llamada sigue siendo 8, y el
+  intento de retractación queda registrado (`estado.correcciones`), no obedecido. Un
+  tercero tampoco puede pisar un valor que el paciente ya confirmó.
 - **Reflejo** (`clinical/reflex_engine.py`): reglas deterministas y un umbral de fiebre,
   sin LLM, ~5ms. Detecta banderas rojas explícitas (p. ej. sangrado activo, dolor torácico,
   dificultad respiratoria) que no deberían depender de que el LLM las interprete bien.
-- **Cortex** (`orchestrator/cortex.py`): recupera 4 fragmentos relevantes del RAG y se los
-  pasa, junto con el turno y el historial, a Llama 3.3 70B con `response_format=json_object`
-  forzado — el modelo nunca devuelve texto libre, siempre el esquema de
-  `RespuestaEstructurada`.
+- **Cortex conversacional** (`orchestrator/cortex.generar_respuesta()`) — llamada B:
+  recupera 4 fragmentos relevantes del RAG híbrido y se los pasa, junto con el turno, el
+  historial y las **dimensiones aún pendientes de esta llamada**, a Llama 3.3 70B con
+  `response_format=json_object` forzado — el modelo nunca devuelve texto libre, siempre el
+  esquema de `RespuestaEstructurada`. Inyectar `dimensiones_pendientes` es lo que hace que
+  el agente pregunte lo que falta, una dimensión por turno, en vez de repetir o dejar
+  dimensiones sin cubrir en llamadas largas.
 
 La **fusión** (`clinical/fusion.py`) toma `criticidad_final = max(reflejo, cortex)`: el
-reflejo puede subir la criticidad que propuso el LLM, nunca bajarla. Este es el mecanismo
-central de la asimetría clínica que pide la rúbrica — un falso negativo (no escalar cuando
-había que escalar) es la falla que más pesa, así que la vía más simple y auditable tiene
-poder de veto sobre la más sofisticada, no al revés.
+reflejo puede subir la criticidad que propuso el LLM, nunca bajarla. Encima de esa fusión,
+`turn_manager.py` aplica una segunda compuerta: **`estado.puede_cerrar_verde`** — un verde
+propuesto por el LLM se degrada a `desconocida` si no están las 6 dimensiones confirmadas,
+o si hay alguna bandera roja presente, o si algún dato confirmado viene de un tercero sin
+que el paciente lo haya corroborado. Esto convierte la regla del prompt ("verde solo con
+evidencia positiva, nunca por defecto") en un chequeo de código, no solo una instrucción
+que el modelo podría ignorar bajo presión — es el mismo patrón que ya usa el validador de
+citas, aplicado a la clasificación de criticidad.
 
 Después de la fusión, el **validador de citas** (`clinical/citation_validator.py`) revisa
 cada afirmación clínica de la respuesta: si no trae un `chunk_id` que exista en ChromaDB,
 la respuesta completa se descarta y se reemplaza por un mensaje honesto que deriva al
-paciente a personal médico. Esto hace la alucinación estructuralmente imposible de
-pronunciar — no es una instrucción de prompt que el modelo pueda ignorar, es un chequeo
-fuera del LLM.
+paciente a personal médico.
 
-El **gemelo de trayectoria** (`clinical/trajectory_twin.py`) está diseñado para comparar
-los síntomas extraídos contra `trayectorias_postop_silver.xlsx` (paciente conocido) o,
-si el paciente no está en el dataset de referencia, contra el promedio del arquetipo
-`recuperacion_normal` para ese procedimiento y día — así un dolor reportado se juzgaría
-contra lo esperado para el día postoperatorio actual, no en el vacío. **Está diseñado**
-porque, igual que el SBAR (ver abajo), hoy no corre con datos reales — ver la limitación
-conocida más abajo.
+El **gemelo de trayectoria** (`clinical/trajectory_twin.py`) compara los síntomas
+confirmados por el paciente (`clinical/estado.a_dict_trajectory_twin()`) contra
+`trayectorias_postop_silver.xlsx` (paciente conocido) o, si el paciente no está en el
+dataset de referencia, contra el promedio del arquetipo `recuperacion_normal` para ese
+procedimiento y día — así un dolor reportado se juzga contra lo esperado para el día
+postoperatorio actual, no en el vacío. También se endureció la validación de enums
+(`trajectory_twin.py`): un literal fuera de la tabla ahora lanza `ValueError` en vez de
+degradarse en silencio a `0` ("normal") vía `.get(x, 0)` — la falla insegura más grave que
+tenía el diseño original (§1.2b de `docs/diseno-esquema-extraccion.md`).
 
-La **memoria longitudinal** (`clinical/memory.py`) persiste un resumen JSON por paciente al
-cerrar cada llamada; la siguiente llamada lo carga como contexto de apertura, para que el
-agente pueda referirse a lo que el paciente reportó la vez anterior.
+Cuando la criticidad final es `amarillo` o `rojo`, se construye el **SBAR de escalamiento**
+(`clinical/sbar.py`) — situación / contexto / evaluación / recomendación, con los síntomas
+confirmados, las desviaciones frente a la trayectoria esperada y las referencias citadas.
+Va en `ResultadoTurno.sbar` y se persiste en la memoria de la llamada.
 
-### Limitación conocida: la extracción de síntomas no existe — `trajectory_twin` es código muerto
+La **memoria longitudinal** (`clinical/memory.py`) persiste el `EstadoClinicoLlamada`
+completo por paciente al cerrar cada llamada (no solo un resumen de texto plano); la
+siguiente llamada usa las dimensiones confirmadas y las que quedaron sin evaluar para
+construir el contexto de apertura, en vez de pegar la transcripción cruda de la llamada
+anterior.
 
-`orquestar_turno()` recibe `sintomas_extraidos: dict | None`, y ese parámetro está
-**hardcodeado a `None`** en las dos únicas rutas que lo invocan: `orchestrator/server.py`
-(la llamada real) y `harness/runner.py` (la evaluación). El LLM nunca extrae dolor, fiebre,
-movilidad, herida, apetito o sueño como datos estructurados — solo decide `criticidad_propuesta`
-y cita afirmaciones clínicas del RAG. Consecuencia directa: `trajectory_twin.comparar()`
-jamás se ejecuta con datos reales, `sesion.sintomas_reportados` queda siempre en `{}`, y el
-SBAR (ver abajo) imprimiría "Síntomas reportados: {}" si se conectara tal cual está.
+### Decisión de alcance tomada en esta entrega
 
-Es la brecha más importante del proyecto — más que el SBAR, porque el gemelo de trayectoria
-es uno de los diferenciadores centrales del diseño (§1) y hoy no aporta nada al
-razonamiento real. Hay un documento de diseño completo para resolverlo
-(`docs/diseno-esquema-extraccion.md`): un esquema `Observacion[T]` con estado epistémico
-explícito (para que "no le pregunté" nunca se confunda con "respondió normal"), una
-llamada de extracción separada de la conversación, y una regla de fusión que solo permite
-escalar en severidad dentro de una llamada. Ver §7 para la decisión de alcance tomada en
-esta entrega.
-
-### Limitación conocida: SBAR no conectado al loop en vivo
-
-`clinical/sbar.py` implementa `construir_sbar()` — el resumen estructurado
-situación/contexto/evaluación/recomendación que sí exige la rúbrica (§4, "qué produce el
-sistema cuando decide alertar"). **A la fecha de este informe, `turn_manager.py` no invoca
-esta función**: existe el módulo, está probado en aislamiento, pero no está enchufado al
-flujo real de `orquestar_turno()`. Es la brecha más importante pendiente antes del video
-de demo — está marcada explícitamente en el diagrama de flujo (línea punteada) en vez de
-representarse como si funcionara. Ver §7, Trabajo pendiente.
+El diseño completo de `docs/diseno-esquema-extraccion.md` se implementó con un recorte
+deliberado: los campos auxiliares de más detalle por dimensión (`dolor.tendencia`,
+`dolor.localizacion_cambio`, `fiebre.medida`, `fiebre.sensacion_termica`) se dejaron
+afuera para no inflar más el esquema JSON que debe llenar el LLM en una sola pasada — cada
+campo extra es una oportunidad más de que la extracción falle. `procedencia` y `confianza`
+también se piden una vez por turno (no repetidas en cada una de las ~15 dimensiones), y se
+aplican uniformemente a todo lo extraído de ese turno — mismo efecto clínico que pedía el
+diseño (§6.1 punto 4), esquema bastante más chico. Estas simplificaciones están anotadas
+en el código (`clinical/extraction.py`), no aplicadas en silencio.
 
 ## 4. Modelo de lenguaje — declaración explícita (compuerta G3)
 
@@ -159,13 +170,16 @@ Razones:
   permitidas por `stack-tecnico.md`.
 
 **Costo real, no solo teórico, de esta elección:** el tier gratuito de Groq para este
-modelo tiene un límite de **100,000 tokens/día** (tokens-per-day, "on-demand"). Con un
-consumo medido de ~1,060 tokens de entrada y ~70 de salida por turno (§6), ese presupuesto
-alcanza para **~88 llamadas al LLM por día**, no para un volumen de evaluación grande. Esto
-se documenta con logs reales en `harness_run.log` / `harness_run2.log` y llevó a correr el
-harness de evaluación (§6) sobre una muestra estratificada en vez del dataset completo. Es
-información relevante para cualquiera que quiera reproducir este proyecto con cuentas
-gratuitas: la arquitectura escala, el tier gratuito no.
+modelo tiene un límite de **100,000 tokens/día** (tokens-per-day, "on-demand"). Con el
+consumo medido antes de activar la extracción de síntomas (~1,060 tokens de entrada y ~70
+de salida por turno, §6), ese presupuesto alcanza para ~88 llamadas al LLM por día. Desde
+que cada turno hace **dos** llamadas (extracción + conversación, §3), el presupuesto
+efectivo bajó a **~44 turnos de paciente por día** — el costo real de haber activado el
+gemelo de trayectoria y el SBAR. Esto se documenta con logs reales en `harness_run.log` /
+`harness_run2.log` y llevó a correr el harness de evaluación (§6) sobre una muestra
+estratificada en vez del dataset completo. Es información relevante para cualquiera que
+quiera reproducir este proyecto con cuentas gratuitas: la arquitectura escala, el tier
+gratuito no.
 
 ## 5. Diseño de la conversación
 
@@ -191,11 +205,14 @@ lo componen:
 
 ## 6. Métricas (§5 de la rúbrica)
 
-> Medidas contra una muestra estratificada del dataset (no el total), por el límite de
-> tokens/día del tier gratuito descrito en §4: 14 casos (los 12 `rojo` completos + 2
-> `amarillo`), capa `capa1_limpia`, 84 turnos de paciente evaluados. Resultados crudos en
-> [`harness_resultados_rojo_capa1.json`](../harness_resultados_rojo_capa1.json);
-> metodología y comando de reproducción en el [README](../README.md#métricas).
+> Medidas contra muestras estratificadas del dataset (no el total), por el límite de
+> tokens/día del tier gratuito descrito en §4. Metodología y comando de reproducción en el
+> [README](../README.md#métricas).
+
+**Muestra principal — arquitectura previa a la extracción de síntomas** (1 llamada al LLM
+por turno): 14 casos (los 12 `rojo` completos + 2 `amarillo`), capa `capa1_limpia`, 84
+turnos de paciente. Resultados crudos en
+[`harness_resultados_rojo_capa1.json`](../harness_resultados_rojo_capa1.json).
 
 | Métrica | Valor |
 |---|---|
@@ -205,6 +222,25 @@ lo componen:
 | Invocaciones al modelo por turno | 1 (la vía refleja no usa LLM) |
 | Consultas al RAG por llamada | 1 por turno de paciente (N_CHUNKS_RAG=4 por consulta) |
 | Costo estimado por llamada (6 turnos) | ≈ USD 0.006 (fórmula y desglose abajo) |
+
+**Muestra de validación — arquitectura actual, con extracción activada** (2 llamadas al
+LLM por turno: extracción + conversación, §3). Muestra chica (1 caso, 6 turnos) porque el
+presupuesto diario de tokens ya estaba parcialmente consumido por la muestra principal —
+sirve para confirmar que el cambio de arquitectura funciona y para dimensionar el impacto
+real en costo/latencia, no como muestra estadísticamente representativa:
+
+| Métrica | Valor |
+|---|---|
+| Latencia P50 / P95 (orquestación, sin STT/TTS) | 3.40s / 15.63s |
+| Tokens de entrada por turno (media / P50) | 1,295 / 1,269 |
+| Tokens de salida por turno (media / P50) | 223 / 220 |
+| Invocaciones al modelo por turno | **2** (extracción + conversación) |
+| Cobertura de extracción al cierre de la llamada | 100% (6/6 dimensiones confirmadas) |
+
+La latencia P50 bajó un poco frente a la muestra principal (extracción sin RAG es rápida),
+pero la P95 subió bastante — dos llamadas secuenciales al mismo proveedor multiplican el
+riesgo de que alguna pegue con un pico de latencia de Groq. Con más tiempo, correrlas en
+paralelo (asyncio) recortaría ese P95 — ver §7.
 
 ### Lo que dice la matriz de confusión (§4 de la rúbrica: asimetría clínica)
 
@@ -237,12 +273,21 @@ costo_llamada ≈ n_turnos × [ (tokens_in/1e6 × 0.59) + (tokens_out/1e6 × 0.7
               + minutos_audio_paciente × (0.111/60)
 ```
 
-Con los promedios medidos en el harness (§6) — 1,070 tokens de entrada y 79 de salida por
-turno — y una llamada típica de 6 turnos de paciente:
+Con los promedios de la muestra principal (§6) — 1,070 tokens de entrada y 79 de salida
+por turno, 1 llamada al LLM — y una llamada típica de 6 turnos de paciente:
 
 - LLM: 6 × [(1070/1e6 × 0.59) + (79/1e6 × 0.79)] ≈ **USD 0.0042**
 - STT: 6 turnos al mínimo de facturación de 10s ≈ 1 minuto de audio ≈ **USD 0.0019**
 - **Total ≈ USD 0.006 por llamada** (seis décimas de centavo de dólar).
+
+Con la arquitectura actual (extracción + conversación, 2 llamadas por turno) el
+componente LLM aproximadamente se duplica: usando los promedios de la muestra de
+validación (1,295 tokens de entrada / 223 de salida, ya cuenta las dos llamadas sumadas
+por turno), 6 × [(1295/1e6 × 0.59) + (223/1e6 × 0.79)] ≈ **USD 0.0057** de LLM, más el
+mismo componente de STT (≈ USD 0.0019) → **Total ≈ USD 0.0076 por llamada** — sigue siendo
+menos de un centavo de dólar, pero es casi 30% más caro que antes de activar la
+extracción. Es el costo explícito de que `trajectory_twin` y el SBAR corran con datos
+reales en vez de código muerto.
 
 Es una cota conservadora por abajo: asume utterances del paciente en el mínimo de
 facturación de Whisper (10s); pacientes más locuaces suben el componente de STT, no el de
@@ -252,25 +297,36 @@ LLM (que depende de tokens, no de duración de audio).
 
 En orden de prioridad:
 
-0. **Implementar la extracción real de síntomas** (`docs/diseno-esquema-extraccion.md`) —
-   es la brecha de mayor impacto: sin ella, `trajectory_twin` no puede correr con datos
-   reales y el SBAR del punto 1 saldría con `sintomas_reportados={}`. Decisión tomada para
-   esta entrega: documentar el gap con honestidad en vez de implementar bajo presión de
-   tiempo el día de entrega — el diseño completo queda listo para ejecutarse después.
-1. **Conectar `construir_sbar()` a `turn_manager.py`** cuando `criticidad_final` sea
-   `amarillo` o `rojo` — depende del punto 0 para no salir vacío; es la brecha más visible
-   entre lo implementado y lo que pide la rúbrica (§4, registro de la alerta).
-2. **Correr el harness completo (160 casos × 2 capas)** en cuanto el presupuesto de
-   tokens/día lo permita, en vez de la muestra estratificada usada para este informe.
-3. **Investigar el recall bajo en `rojo`** observado en la muestra inicial — el reflejo
+0. ~~Implementar la extracción real de síntomas~~ (`docs/diseno-esquema-extraccion.md`).
+   **Hecho durante la construcción** — ver §3 y §8: `clinical/extraction.py` +
+   `clinical/estado.py` implementan el esquema completo (`Observacion[T]`, `EstadoSlot`,
+   `TriEstado`, fusión con regla "solo escala"), con el recorte de alcance documentado en
+   §3. `trajectory_twin` y el SBAR corren ahora con datos reales, verificado en vivo.
+1. ~~Conectar `construir_sbar()` a `turn_manager.py`~~. **Hecho** — se construye
+   automáticamente cuando `criticidad_final` es `amarillo` o `rojo` (§3), verificado en
+   la prueba end-to-end de §8 (`sbar` no `None` en un turno con fiebre de 39°C).
+2. **Paralelizar las dos llamadas al LLM por turno** (extracción y conversación) con
+   `asyncio` en vez de secuenciales — son independientes entre sí (ninguna depende de la
+   salida de la otra dentro del mismo turno), así que correrlas en paralelo recortaría la
+   latencia percibida casi a la mitad sin tocar el presupuesto de tokens. Es el ajuste de
+   mayor impacto que falta y no se alcanzó a hacer en el tiempo disponible.
+3. **Correr el harness completo (160 casos × 2 capas)** en cuanto el presupuesto de
+   tokens/día lo permita — ahora más lejos todavía, porque la extracción duplicó el costo
+   por turno (§4, §6).
+4. **Investigar el recall bajo en `rojo`** observado en la muestra inicial — el reflejo
    determinista no está capturando todos los patrones que el LLM subestima; requiere
-   revisar `clinical/reflex_rules.py` contra los casos rojo que fallaron.
-4. ~~Endurecer el arranque en ≤15 minutos (compuerta G2) con una prueba de instalación
+   revisar `clinical/reflex_rules.py` contra los casos rojo que fallaron. Sigue pendiente
+   con la arquitectura nueva — sería el primer punto a re-evaluar con una muestra grande.
+5. **Implementar los campos auxiliares recortados en esta entrega** (§3): tendencia del
+   dolor, si el dolor migró, si la fiebre fue medida o sentida — quedaron fuera del
+   esquema JSON de la llamada A para no arriesgar su validez, documentado explícitamente
+   en `clinical/extraction.py`, no aplicado a medias.
+6. ~~Endurecer el arranque en ≤15 minutos (compuerta G2) con una prueba de instalación
    limpia de punta a punta en una máquina sin el entorno preconfigurado.~~ **Hecho durante
    la construcción** — ver §8: la prueba de instalación limpia encontró dos riesgos reales
    contra G2 (reindexado completo del corpus, tamaño del modelo de embeddings) y ambos se
    corrigieron antes de la entrega, no quedaron como hallazgo sin resolver.
-5. Medir en la práctica el tiempo de arranque en limpio con el índice ya comiteado
+7. Medir en la práctica el tiempo de arranque en limpio con el índice ya comiteado
    (`git clone` → `uvicorn`, sin `build_index`) para tener un número real de G2, no solo la
    expectativa de diseño.
 
@@ -307,6 +363,18 @@ preparado:
 
 Ninguno de los dos hallazgos se dejó como nota al margen: ambos se corrigieron en el
 código antes de esta versión del informe.
+
+Al activar la extracción de síntomas, la primera prueba en vivo contra el LLM falló con un
+error de validación de Pydantic en tres campos (`medicacion.toma_analgesico`,
+`contexto.acompanado`, `contexto.transporte_disponible`): el LLM devolvía `null` explícito
+en vez de omitir el campo, y Pydantic solo aplica el valor por defecto cuando el campo
+está *ausente*, no cuando llega `null` explícito — un `null` explícito pisa el default.
+El turno no se cayó (la extracción está envuelta en `try/except` en `turn_manager.py`,
+justo para que una extracción fallida no tumbe la conversación), pero la cobertura de esa
+llamada se quedó en 0. Corrección: esos campos pasaron a aceptar `TriEstado | None`, con
+una normalización explícita (`_o_no_evaluado()`) que trata `None` igual que
+`"no_evaluado"` antes de construir el `Observacion`. Verificado con la misma prueba en
+vivo repetida — ver la tabla de la muestra de validación en §6.
 
 ## Capturas del demo
 

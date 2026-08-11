@@ -39,6 +39,17 @@ def falsos_negativos_rojo(matriz: dict[str, dict[str, int]]) -> int:
     return matriz["rojo"]["verde"]
 
 
+def cobertura_final_por_caso(resultados: list[ResultadoEvaluacionTurno]) -> dict[str, float]:
+    """Cobertura de extracción (dimensiones confirmadas / 6) al último turno de cada
+    caso+capa — mide si la llamada terminó sabiendo lo que necesitaba saber, no solo si
+    clasificó bien (§9 del diseño de extracción)."""
+    por_caso: dict[str, float] = {}
+    for r in resultados:
+        clave = f"{r.caso_id}::{r.capa}"
+        por_caso[clave] = r.cobertura  # los turnos vienen en orden, el último gana
+    return por_caso
+
+
 def latencias_p50_p95(resultados: list[ResultadoEvaluacionTurno]) -> tuple[float, float]:
     latencias = sorted(r.latencia_s for r in resultados)
     if not latencias:
@@ -71,6 +82,11 @@ def imprimir_reporte(resultados: list[ResultadoEvaluacionTurno], etiqueta: str =
 
     n_veto = sum(1 for r in resultados if r.reflejo_vetea)
     print(f"Turnos donde el reflejo vetó al cortex: {n_veto}")
+
+    coberturas = list(cobertura_final_por_caso(resultados).values())
+    if coberturas:
+        print(f"\nCobertura de extracción al cierre de la llamada — media: {statistics.mean(coberturas):.1%}, "
+              f"casos con cobertura completa (6/6): {sum(1 for c in coberturas if c == 1.0)}/{len(coberturas)}")
 
     distribucion_predicha = Counter(r.criticidad_predicha for r in resultados)
     print(f"\nDistribución predicha: {dict(distribucion_predicha)}")

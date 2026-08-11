@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from groq import APIConnectionError, APIStatusError
 
+from agente_postop.clinical.estado import EstadoClinicoLlamada
 from agente_postop.orchestrator.turn_manager import orquestar_turno
 from harness.reproducer import Caso, procedimiento_de, reconstruir_caso
 
@@ -31,13 +32,16 @@ class ResultadoEvaluacionTurno:
     criticidad_predicha: str
     reflejo_vetea: bool
     latencia_s: float
+    cobertura: float = 0.0
 
 
 def correr_caso(caso: Caso) -> list[ResultadoEvaluacionTurno]:
     procedimiento = procedimiento_de(caso.paciente_id)
     resultados: list[ResultadoEvaluacionTurno] = []
     historial: list[str] = []
+    estado_clinico = EstadoClinicoLlamada()
     es_primer_turno = True
+    turno_idx = 0
 
     for turno in caso.turnos:
         if turno.hablante != "paciente":
@@ -52,7 +56,8 @@ def correr_caso(caso: Caso) -> list[ResultadoEvaluacionTurno]:
                     procedimiento=procedimiento,
                     dia_postop=caso.dia_postop,
                     historial_turno="\n".join(historial[-6:]) if historial else "(inicio de la llamada)",
-                    sintomas_extraidos=None,
+                    estado_clinico=estado_clinico,
+                    turno_idx=turno_idx,
                     es_primer_turno_de_la_llamada=es_primer_turno,
                 )
                 break
@@ -67,6 +72,7 @@ def correr_caso(caso: Caso) -> list[ResultadoEvaluacionTurno]:
 
         latencia_s = time.perf_counter() - inicio
         es_primer_turno = False
+        turno_idx += 1
 
         if resultado is None:
             continue
@@ -85,6 +91,7 @@ def correr_caso(caso: Caso) -> list[ResultadoEvaluacionTurno]:
                 criticidad_predicha=resultado.criticidad_final.value,
                 reflejo_vetea=resultado.reflejo_vetea,
                 latencia_s=latencia_s,
+                cobertura=resultado.cobertura,
             )
         )
 

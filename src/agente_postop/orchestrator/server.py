@@ -16,8 +16,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from agente_postop.clinical.memory import ResumenLlamada, guardar_resumen, timestamp_actual
-from agente_postop.clinical.models import Criticidad
+from agente_postop.clinical.estado import EstadoClinicoLlamada, comparar_estados
+from agente_postop.clinical.memory import MotivoCierre, ResumenLlamada, guardar_resumen, timestamp_actual, ultimo_resumen
+from agente_postop.clinical.models import SBAR, Criticidad
 from agente_postop.console.api import router as console_router
 from agente_postop.orchestrator.turn_manager import orquestar_turno
 from agente_postop.voice.stt_groq import transcribir
@@ -54,8 +55,9 @@ class SesionLlamada:
     procedimiento: str
     dia_postop: int
     turnos: list[str] = field(default_factory=list)
-    sintomas_reportados: dict[str, str] = field(default_factory=dict)
+    estado_clinico: EstadoClinicoLlamada = field(default_factory=EstadoClinicoLlamada)
     criticidad_maxima: Criticidad = Criticidad.VERDE
+    ultimo_sbar: SBAR | None = None
 
     def historial_texto(self) -> str:
         return "\n".join(self.turnos[-6:]) if self.turnos else "(inicio de la llamada)"
@@ -92,6 +94,7 @@ async def llamada(websocket: WebSocket):
                 continue
 
             es_primer_turno = len(sesion.turnos) == 0
+            turno_idx = len(sesion.turnos) // 2
             sesion.turnos.append(f"paciente: {texto_paciente}")
 
             resultado = orquestar_turno(
@@ -100,13 +103,16 @@ async def llamada(websocket: WebSocket):
                 procedimiento=sesion.procedimiento,
                 dia_postop=sesion.dia_postop,
                 historial_turno=sesion.historial_texto(),
-                sintomas_extraidos=None,
+                estado_clinico=sesion.estado_clinico,
+                turno_idx=turno_idx,
                 es_primer_turno_de_la_llamada=es_primer_turno,
             )
 
             sesion.turnos.append(f"agente: {resultado.respuesta_hablada}")
             if resultado.criticidad_final.rango > sesion.criticidad_maxima.rango:
                 sesion.criticidad_maxima = resultado.criticidad_final
+            if resultado.sbar is not None:
+                sesion.ultimo_sbar = resultado.sbar
 
             audio_respuesta = sintetizar_wav(resultado.respuesta_hablada)
 
@@ -117,20 +123,37 @@ async def llamada(websocket: WebSocket):
                     "criticidad_final": resultado.criticidad_final.value,
                     "reflejo_vetea": resultado.reflejo_vetea,
                     "afirmaciones_clinicas": [a.model_dump() for a in resultado.afirmaciones_clinicas],
+                    "cobertura": resultado.cobertura,
+                    "verde_bloqueado_por_cobertura": resultado.verde_bloqueado_por_cobertura,
+                    "sbar": resultado.sbar.model_dump() if resultado.sbar else None,
                 }
             )
             await websocket.send_bytes(audio_respuesta)
 
     except WebSocketDisconnect:
         if sesion.turnos:
+            anterior = ultimo_resumen(sesion.paciente_id)
+            delta_vs_anterior = (
+                comparar_estados(anterior.estado_final, sesion.estado_clinico) if anterior else []
+            )
+            motivo_cierre = (
+                MotivoCierre.ESCALADA_INMEDIATA
+                if sesion.criticidad_maxima == Criticidad.ROJO
+                else MotivoCierre.COMPLETADA
+            )
             guardar_resumen(
                 ResumenLlamada(
                     paciente_id=sesion.paciente_id,
                     dia_postop=sesion.dia_postop,
                     fecha=timestamp_actual(),
-                    sintomas_reportados=sesion.sintomas_reportados,
-                    criticidad_final=sesion.criticidad_maxima.value,
+                    estado_final=sesion.estado_clinico,
+                    criticidad_final=sesion.criticidad_maxima,
                     alerta_generada=sesion.criticidad_maxima != Criticidad.VERDE,
                     resumen_texto=sesion.historial_texto(),
+                    cobertura=sesion.estado_clinico.cobertura,
+                    dimensiones_no_evaluadas=sesion.estado_clinico.dimensiones_pendientes,
+                    sbar=sesion.ultimo_sbar,
+                    delta_vs_llamada_anterior=delta_vs_anterior,
+                    motivo_cierre=motivo_cierre,
                 )
             )
