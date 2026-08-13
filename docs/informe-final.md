@@ -2,6 +2,8 @@
 
 Tech Sphere Challenge 2026 · Entregable 03
 
+**Video de la demo (entregable 04):** https://youtu.be/XY9z0gflZvg
+
 > Este informe se redactó durante la construcción, con Claude Code como asistente de
 > desarrollo. Todo lo que declara este documento se contrasta contra el código y los logs
 > del repositorio — donde hay una limitación conocida, se nombra explícitamente en vez de

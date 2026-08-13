@@ -6,6 +6,18 @@ doble vía de decisión (reglas deterministas + LLM) y escala a personal humano 
 corresponde. No es un chatbot reactivo: compara lo reportado contra la trayectoria de
 recuperación esperada para el procedimiento y el día postoperatorio.
 
+**▶ [Ver el video de la demo](https://youtu.be/XY9z0gflZvg)** — funcionamiento en vivo y las
+dos preguntas de cierre.
+
+## Los cuatro entregables
+
+| # | Entregable | Dónde |
+|---|---|---|
+| 01 | Repositorio | este repositorio · arranque en ["Instalación"](#instalación-15-minutos) |
+| 02 | Diagrama | [arquitectura](docs/diagrama-arquitectura.svg) y [flujo de decisión](docs/diagrama-flujo-decision.svg) |
+| 03 | Informe final | [`docs/informe-final.md`](docs/informe-final.md) |
+| 04 | Video | https://youtu.be/XY9z0gflZvg |
+
 Contexto del reto, reglas de evaluación y dataset original: [`docs/reto-original-readme.md`](docs/reto-original-readme.md),
 [`docs/rubrica-evaluacion.md`](docs/rubrica-evaluacion.md), [`docs/stack-tecnico.md`](docs/stack-tecnico.md).
 
