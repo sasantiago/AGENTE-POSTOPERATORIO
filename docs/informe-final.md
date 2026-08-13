@@ -153,10 +153,26 @@ en el código (`clinical/extraction.py`), no aplicadas en silencio.
 
 ## 4. Modelo de lenguaje — declaración explícita (compuerta G3)
 
-**Modelo usado: Llama 3.3 70B Versatile, vía Groq Cloud (nivel gratuito), familia Meta
-Llama.**
+**Modelos usados — dos, ambos dentro de las familias permitidas:**
 
-Razones:
+| Llamada | Modelo | Familia (`stack-tecnico.md` §1) |
+|---|---|---|
+| B — conversación con el paciente | `llama-3.3-70b-versatile` vía Groq Cloud (nivel gratuito) | Meta Llama |
+| A — extracción clínica del turno | `gemini-flash-latest` vía Google AI (nivel gratuito) | Google Gemini, gama Flash |
+
+El alias `-latest` en Gemini es deliberado: `stack-tecnico.md` advierte que los proveedores
+retiran snapshots sin aviso y por eso fija familias y no versiones. Se comprobó en la
+práctica — `gemini-2.0-flash` ya responde 404. `EXTRACCION_EN_GEMINI=false` devuelve todo a
+Groq sin tocar código, y ante cualquier fallo de Gemini la extracción cae a Groq
+automáticamente (`orchestrator/cortex.py`), porque perder la extracción es perder la
+cobertura, y sin cobertura no hay verde posible.
+
+**Por qué la extracción no corre en el modelo grande:** es una tarea cerrada —leer un turno
+y mapearlo a un vocabulario fijo de seis dimensiones y seis banderas—, no un problema de
+razonamiento clínico. Lo que sí aporta separarla es que consume un cupo distinto: repartir
+las dos llamadas del turno entre dos proveedores no divide el presupuesto, lo duplica.
+
+Razones de la elección de Llama 3.3 70B para la conversación:
 
 - **Latencia.** Las LPU de Groq entregan tokens a velocidad muy por encima de un GPU
   genérico; en una conversación de voz, cada segundo de espera antes de que suene la
@@ -169,17 +185,66 @@ Razones:
 - **Nivel gratuito real**, sin tarjeta de crédito, dentro de la lista de familias
   permitidas por `stack-tecnico.md`.
 
-**Costo real, no solo teórico, de esta elección:** el tier gratuito de Groq para este
-modelo tiene un límite de **100,000 tokens/día** (tokens-per-day, "on-demand"). Con el
-consumo medido antes de activar la extracción de síntomas (~1,060 tokens de entrada y ~70
-de salida por turno, §6), ese presupuesto alcanza para ~88 llamadas al LLM por día. Desde
-que cada turno hace **dos** llamadas (extracción + conversación, §3), el presupuesto
-efectivo bajó a **~44 turnos de paciente por día** — el costo real de haber activado el
-gemelo de trayectoria y el SBAR. Esto se documenta con logs reales en `harness_run.log` /
-`harness_run2.log` y llevó a correr el harness de evaluación (§6) sobre una muestra
-estratificada en vez del dataset completo. Es información relevante para cualquiera que
-quiera reproducir este proyecto con cuentas gratuitas: la arquitectura escala, el tier
-gratuito no.
+### 4.1 Presupuesto de tokens — el límite real de una cuenta gratuita
+
+El tier gratuito de Groq da **100,000 tokens/día**. Ese número, y no la arquitectura, es lo
+que fija cuántas llamadas puede atender el agente, así que se auditó turno a turno
+reconstruyendo los prompts sin invocar la API (medición de costo cero).
+
+**Punto de partida: 5.809 tokens por turno.** Una llamada de 12 turnos costaba 69.708
+tokens: **1,4 llamadas por día**. El desglose mostró que solo ~58 tokens por turno (el 1%)
+eran información nueva; el 99% era andamiaje re-comprado en cada turno.
+
+| Componente | Antes | Después |
+|---|---|---|
+| Contexto RAG | 2.917 (50,2%) | 672 |
+| `SYSTEM_PROMPT_EXTRACCION` | 1.138 | 805 |
+| `SYSTEM_PROMPT` (conversación) | 695 | 614 |
+| Salida generada | 470 | 230 |
+| Historial (se mandaba duplicado) | 379 | 189 |
+| **Total por turno** | **5.809** | **2.736** |
+
+Las cuatro medidas, en orden de impacto:
+
+1. **El chunker rendía 2,2× su tamaño declarado.** `TAMANO_OBJETIVO_CHARS = 1200`, pero el
+   86% del índice lo excedía (mediana 2.631 chars, máximo 12.614). La causa: un párrafo más
+   largo que el objetivo nunca se subdividía —el Markdown que Docling produce desde PDFs
+   clínicos está lleno de ellos— y salía como un chunk único. Corregido en
+   `ingestion/chunking.py`; **el índice comiteado conserva los chunks viejos** (re-indexar
+   cuesta ~2,3 h de CPU) y la corrección aplica a toda ingesta nueva por el vault.
+2. **Recorte al inyectar, no al indexar.** El chunk que conviene recuperar (amplio, más
+   superficie de match) no es el que conviene enviar. Se manda el pasaje contiguo más
+   relacionado con la consulta (~700 chars) en vez del chunk entero, conservando el
+   `chunk_id`: el validador de citas verifica el id, no la longitud, así que la trazabilidad
+   queda intacta. Esto rescata la mayor parte del ahorro sin re-indexar.
+3. **RAG condicional.** El propio prompt de sistema dice que en un turno de pura indagación
+   la lista de afirmaciones va vacía; ahí los fragmentos se pagaban para que el modelo
+   tuviera prohibido usarlos. Sobre los 960 turnos de paciente del dataset, el 35% son
+   reportes de normalidad sin pregunta ni señal de anomalía y no reciben fragmentos. Una
+   bandera refleja siempre fuerza la recuperación.
+4. **La extracción dejó de emitir nulls.** El prompt exigía las ~15 claves del esquema
+   siempre presentes. Era redundante: `ExtraccionCruda` da default seguro a cada campo
+   ausente y `_fusionar_dimension` descarta el delta `NO_PREGUNTADO`, de modo que
+   "omitir == no preguntado" ya estaba garantizado por código determinista. Pedírselo además
+   al modelo era pagar dos veces por la misma garantía — y la más frágil de las dos.
+
+**El cambio estructural: dos presupuestos, no uno.** Mover la extracción a Gemini Flash
+reparte el turno entre dos cupos independientes, así que el límite ya no es la suma sino el
+mayor de los dos:
+
+| Presupuesto | tok/turno | Llamada de 12 turnos | Llamadas/día/clave |
+|---|---|---|---|
+| Groq (Llama 3.3 70B) | 1.708 | 20.498 | 4,9 |
+| Gemini (Flash) | 1.028 | 12.333 | 8,1 |
+| **Cuello de botella** | | **20.498** | **4,9** |
+
+De **1,4 a 4,9 llamadas por día por clave — 3,5×** — sin tocar el motor de reflejos, la
+fusión determinista ni el validador de citas, que son los que sostienen la seguridad. La
+suite adversarial (8 escenarios) pasa completa tras la compresión de los prompts.
+
+Sigue siendo cierto lo esencial: **la arquitectura escala, el tier gratuito no.** Pero el
+techo pasó de una llamada por día a cinco por clave, y el pool de claves con rotación
+automática (`clients.py`) multiplica desde ahí.
 
 ## 5. Diseño de la conversación
 
@@ -256,6 +321,124 @@ Lectura honesta: el diseño evita la falla más grave (rojo→verde), pero el co
 conservador prediciendo `amarillo` donde correspondía `rojo`, y `reflex_rules.py` no
 cubre todavía los patrones que llevan a esos 49 casos — ver §7, punto 3.
 
+### 6.1 El recall de `rojo` de 8,3 % era un artefacto de medición
+
+El primer reporte daba **recall de `rojo` = 8,3 %** y se documentó como una limitación del
+agente. Al ir a corregirla apareció que el número medía otra cosa.
+
+`label_ground_truth` es una etiqueta **de caso, no de turno**: los 160 casos del dataset
+tienen el mismo valor en todos sus turnos (comprobado: `groupby('caso_id').nunique() == 1`
+para los 160). Un caso es `rojo` por el cuadro completo de la llamada, no porque cada turno
+lo sea. En `caso_tray_pac_42_00017_7`, por ejemplo, la etiqueta es `rojo` y **ningún turno
+aislado lo es**: es un paciente que minimiza («un poquito molesto no más», «37 y algo, nada
+de escalofríos», «un poquito rojita pero nada de pus»), y la señal está en el conjunto.
+
+El harness comparaba la criticidad *de cada turno* contra esa etiqueta *de caso*. Es decir,
+penalizaba al agente por no gritar ROJO cuando el paciente contestaba que había dormido mal.
+Reagregando los mismos resultados crudos por caso —¿a qué nivel llegó a escalar la llamada?—:
+
+| Vista | Recall `rojo` | Casos `rojo` que colgaron sin escalar |
+|---|---|---|
+| Por turno (lo que se reportaba) | 8,3 % | — |
+| **Por caso** (como está etiquetado el dataset) | **41,7 %** | **0 de 12** |
+
+`harness/report.py` ahora imprime las dos vistas. La de turno mide reactividad turno a
+turno; la de caso responde a la pregunta clínica real: al colgar, ¿esta llamada quedó
+escalada? Ninguna de las dos sustituye a la otra, pero solo la segunda es comparable contra
+la etiqueta del dataset.
+
+### 6.2 Dos fallos reales de la vía refleja, y lo que valían
+
+Con la métrica corregida, el 41,7 % restante sí era mejorable. La vía refleja se evaluó
+contra los 160 casos **sin gastar un solo token** (es determinista: no hay LLM en el
+camino), lo que permitió iterar sobre el dataset completo en vez de sobre una muestra de 14.
+
+**Fallo 1 — la fiebre se perdía si el paciente no decía «grados».** `extraer_temperatura_c`
+exigía la unidad (`(\d{2})\s*(?:°|grados)`), pero el paciente dice «me la tomé y marcó
+como 38», «marcaba como 39 algo», «38 y algo». **5 de los 7 casos `rojo` no detectados
+reportaban una temperatura ≥ 38 en palabras.** La fiebre es la bandera roja más común del
+postoperatorio y se estaba perdiendo entera. Ahora se acepta la forma coloquial cuando el
+turno habla de temperatura (`fiebre`, `afiebrada`, `marcó`, `escalofrío`…), acotada al rango
+fisiológico 35–42,5 °C para que la intensidad del dolor («como un 5») no se lea como fiebre.
+
+**Fallo 2 — la regla `pus` disparaba con la negación.** `pus` se buscaba como subcadena
+suelta, así que «no le sale nada de líquido **ni pus**» y «no veo **pus** ni nada raro»
+—turnos donde el paciente *descarta* el síntoma— forzaban ROJO, igual que «me **pus**ieron
+suero». Se añadió detección de negación que mira **solo hacia atrás**, para que las reglas
+que llevan el «no» dentro del patrón («no puedo respirar», «no para de sangrar») sigan
+disparando intactas.
+
+Además, el paciente no dice «secreción»: dice «un líquido, amarillo creo, saliendo de la
+herida». Se añadió una regla de coocurrencia drenaje + color.
+
+Resultado sobre los 160 casos, vía refleja sola:
+
+| | Antes | Después |
+|---|---|---|
+| Recall `rojo` (capa1 / capa2) | 41,7 % / 41,7 % | **66,7 % / 58,3 %** |
+| Falsos positivos sobre casos `verde` | 13,0 % (16/123) | **0,0 % (0/123)** |
+| Sobre-escalamiento de casos `amarillo` a rojo | 48,0 % | 4,0 % |
+
+Los 4 casos `rojo` que siguen sin detectarse no tienen ninguna señal dura en ningún turno:
+son pacientes que evaden toda medición («no le he puesto cuidado a eso», «acalorada a
+ratos»). Ahí la respuesta correcta no es un reflejo sino indagar, que es lo que ya hace
+`puede_cerrar_verde` al degradar a `desconocida` en vez de cerrar en verde. Fijado en
+`tests/test_reflex_rules.py` (31 casos, todos derivados del dataset).
+
+### 6.3 Latencia: lo que se reportaba no era lo que la rúbrica mide
+
+La tabla de arriba reporta «latencia de orquestación, sin STT/TTS». La rúbrica §5 pide otra
+cosa: **desde que el paciente termina de hablar hasta que empieza a sonar el audio del
+agente**. Son magnitudes distintas y la segunda siempre es mayor. Además, el camino de voz
+real no estaba instrumentado —`server.py` no tenía un solo `perf_counter`— y **el logging
+nunca se configuró**, así que todo `logger.info` se descartaba en silencio: no había logs
+que contrastar.
+
+Ahora cada turno emite una línea con las etapas desglosadas, a consola y a
+`agente_postop.log`:
+
+```
+turno paciente=pac_42_00017 criticidad=rojo rag_ms=763 llm_conversacion_ms=697
+  llm_extraccion_ms=5000 orquestacion_ms=5848 tts_ms=1076 total_ms=6968 ttfr_ms=6975
+```
+
+Lo primero que mostró esa instrumentación fue un fallo que llevaba tiempo escondido:
+
+```
+llm_conversacion_ms=5415  llm_extraccion_ms=36445  tts_ms=527  total_ms=36993
+```
+
+La extracción —la tarea *barata*, la que se movió a Gemini Flash justo por ser cerrada y
+liviana— costaba **siete veces** la conversación. Dos causas: `generar_json_gemini` llamaba
+a `generate_content` **sin timeout** (el cliente de Groq sí fallaba rápido, con
+`TIMEOUT_S=15`), y `MAX_TOKENS_EXTRACCION=500` truncaba el JSON a mitad de cadena
+(`Unterminated string starting at line 2 column 25`), lo que invalidaba la respuesta y
+forzaba la caída a Groq — pagando dos llamadas donde debía pagar una, y perdiendo justo el
+cupo separado que justifica usar Gemini.
+
+Corregidos el timeout y el techo de tokens: **36,9 s → 7,0 s por turno**.
+
+| Etapa | ms (turno medido en vivo) |
+|---|---:|
+| RAG (embedding e5 en CPU + Chroma + BM25) | 763 |
+| LLM conversación (Llama 3.3 70B) | 697 |
+| LLM extracción (Gemini Flash) | 5 000 |
+| Orquestación (máximo de las dos, en paralelo) | 5 848 |
+| TTS (Piper, respuesta completa) | 1 076 |
+| **Total del turno** | **6 968** |
+
+Dos consecuencias de tener por fin el desglose:
+
+- **El TTS no era el cuello de botella.** Con 527–1 076 ms sobre ~7 000, es el 7–15 % del
+  turno. Se había considerado partir la síntesis por frases para emitir la primera antes;
+  con estos números, eso gana ~400 ms a cambio de tocar el protocolo del WebSocket y el
+  cliente, con G4 en juego. Se descartó **por la medición**, no por falta de tiempo.
+- **El primer turno pagaba la carga de los modelos.** Piper y `multilingual-e5-base` se
+  cargaban de forma perezosa: ~25 s en el primer turno de la llamada, justo el que ve el
+  jurado. Eso explicaba el P95 de 9,91 s. Ahora se precargan en el `lifespan` de FastAPI, y
+  esos segundos se pagan en el arranque del servidor (que no cuenta contra G2: el reloj mide
+  el levantamiento y esto ocurre dentro de él, sumando ~25 s a un procedimiento de minutos).
+
 ### Cómo se calcula el costo estimado por llamada
 
 La solución corre sobre APIs gratuitas (Groq) más un componente local (Piper TTS, sin
@@ -305,18 +488,21 @@ En orden de prioridad:
 1. ~~Conectar `construir_sbar()` a `turn_manager.py`~~. **Hecho** — se construye
    automáticamente cuando `criticidad_final` es `amarillo` o `rojo` (§3), verificado en
    la prueba end-to-end de §8 (`sbar` no `None` en un turno con fiebre de 39°C).
-2. **Paralelizar las dos llamadas al LLM por turno** (extracción y conversación) con
-   `asyncio` en vez de secuenciales — son independientes entre sí (ninguna depende de la
-   salida de la otra dentro del mismo turno), así que correrlas en paralelo recortaría la
-   latencia percibida casi a la mitad sin tocar el presupuesto de tokens. Es el ajuste de
-   mayor impacto que falta y no se alcanzó a hacer en el tiempo disponible.
+2. ~~**Paralelizar las dos llamadas al LLM por turno**~~ (extracción y conversación).
+   **Hecho** — corren concurrentes en un `ThreadPoolExecutor` (`turn_manager.py`), así que
+   el turno paga el máximo de las dos y no la suma. El cronómetro por etapa de
+   `orchestrator/metrics.py` lo confirma en los logs: `llm_conversacion_ms` y
+   `llm_extraccion_ms` se solapan dentro de `orquestacion_ms`.
 3. **Correr el harness completo (160 casos × 2 capas)** en cuanto el presupuesto de
    tokens/día lo permita — ahora más lejos todavía, porque la extracción duplicó el costo
    por turno (§4, §6).
-4. **Investigar el recall bajo en `rojo`** observado en la muestra inicial — el reflejo
-   determinista no está capturando todos los patrones que el LLM subestima; requiere
-   revisar `clinical/reflex_rules.py` contra los casos rojo que fallaron. Sigue pendiente
-   con la arquitectura nueva — sería el primer punto a re-evaluar con una muestra grande.
+4. ~~**Investigar el recall bajo en `rojo`**~~. **Hecho, y el diagnóstico inicial era
+   equivocado** — ver §6.1. Dos causas, ninguna de las cuales era «el LLM subestima»: la
+   métrica comparaba criticidad *de turno* contra una etiqueta *de caso*, y la vía refleja
+   perdía la fiebre cuando el paciente no decía «grados». Corregidas ambas, el recall de la
+   vía refleja sobre los 160 casos pasa de 41,7 % a 66,7 % y los falsos positivos sobre
+   casos `verde` caen de 13 % a 0 %. Queda pendiente re-correr el harness completo (punto 3)
+   para medir el sistema entero, no solo la vía refleja.
 5. **Implementar los campos auxiliares recortados en esta entrega** (§3): tendencia del
    dolor, si el dolor migró, si la fiebre fue medida o sentida — quedaron fuera del
    esquema JSON de la llamada A para no arriesgar su validez, documentado explícitamente

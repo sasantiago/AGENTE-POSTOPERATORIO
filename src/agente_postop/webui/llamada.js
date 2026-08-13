@@ -164,9 +164,52 @@ function conectarWebSocket(pacienteId, procedimiento, diaPostop) {
   };
 }
 
+// --- registro de pacientes ---------------------------------------------------
+// El procedimiento se lee de la historia clínica del paciente, no se elige. La opción de
+// entrada manual existe solo para la demostración de G5 (Rinoplastia), que a propósito no
+// está ni en el corpus ni en el registro.
+const OPCION_MANUAL = "__manual__";
+let REGISTRO = {};
+
+async function cargarRegistro() {
+  const res = await fetch("/api/pacientes");
+  const { pacientes, procedimientos } = await res.json();
+  REGISTRO = Object.fromEntries(pacientes.map((p) => [p.paciente_id, p]));
+
+  $("input-paciente-registro").innerHTML =
+    pacientes.map((p) => `<option value="${p.paciente_id}">${p.paciente_id} · ${p.procedimiento}</option>`).join("") +
+    `<option value="${OPCION_MANUAL}">— otro procedimiento (demo) —</option>`;
+
+  $("input-procedimiento").innerHTML = procedimientos.map((p) => `<option>${p}</option>`).join("");
+  $("input-procedimiento").value = "Rinoplastia";
+  mostrarFicha();
+}
+
+function mostrarFicha() {
+  const id = $("input-paciente-registro").value;
+  const manual = id === OPCION_MANUAL;
+  $("bloque-manual").classList.toggle("oculto", !manual);
+
+  const p = REGISTRO[id];
+  if (manual) {
+    $("ficha-paciente").textContent = "Entrada manual — solo para demostrar conocimiento nuevo.";
+  } else if (p) {
+    const comorbilidades = p.comorbilidades.length ? p.comorbilidades.join(", ") : "sin comorbilidades";
+    const edad = p.edad ? ` · ${p.edad} años` : "";
+    $("ficha-paciente").textContent = `${p.procedimiento} · operado el ${p.fecha_cirugia}${edad} · ${comorbilidades}`;
+  } else {
+    $("ficha-paciente").textContent = "";
+  }
+}
+
+$("input-paciente-registro").addEventListener("change", mostrarFicha);
+cargarRegistro();
+
 $("boton-iniciar").addEventListener("click", () => {
-  const pacienteId = $("input-paciente").value || "paciente";
-  const procedimiento = $("input-procedimiento").value;
+  const seleccion = $("input-paciente-registro").value;
+  const manual = seleccion === OPCION_MANUAL;
+  const pacienteId = manual ? $("input-paciente").value || "paciente" : seleccion;
+  const procedimiento = manual ? $("input-procedimiento").value : REGISTRO[seleccion]?.procedimiento;
   const diaPostop = parseInt($("input-dia").value, 10);
 
   $("panel-config").classList.add("oculto");

@@ -64,8 +64,26 @@ def _extraer_texto_digital(ruta: Path) -> str | None:
     return texto
 
 
+EXTENSIONES_YA_TEXTO = {".md", ".txt"}
+
+
 def convertir_a_markdown(ruta: Path) -> DocumentoConvertido:
     hash_contenido = hash_archivo(ruta)
+
+    if ruta.suffix.lower() in EXTENSIONES_YA_TEXTO:
+        # Un .md ya ES el formato de destino: pasarlo por Docling es reparsear y reexportar
+        # para nada, y no sale igual de como entró. Medido sobre un .md de prueba: se
+        # perdieron las negritas y se insertó un salto de párrafo en mitad de una frase
+        # ("...séptimo día \n\n posoperatorio, en consulta control"). Ese salto no es
+        # cosmético: `chunkear_markdown` separa por línea en blanco, así que una frase
+        # partida puede acabar con su matiz clínico en otro fragmento del que se cita.
+        return DocumentoConvertido(
+            ruta_origen=ruta,
+            nombre_documento=ruta.name,
+            markdown=ruta.read_text(encoding="utf-8", errors="replace"),
+            hash_contenido=hash_contenido,
+            via="texto_plano",
+        )
 
     if ruta.suffix.lower() == ".pdf":
         texto_digital = _extraer_texto_digital(ruta)

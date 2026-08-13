@@ -88,6 +88,7 @@
   #boton-hablar svg { width: 28px; height: 28px; fill: white; }
 
   .oculto { display: none !important; }
+  .nota-ficha { margin: 0.35rem 0 0.9rem; font-size: 0.82rem; color: var(--ink-soft); line-height: 1.45; }
 </style>
 </head>
 <body>
@@ -99,16 +100,23 @@
 
 <div id="panel-config" class="glass-card">
   <h2>Antes de empezar</h2>
-  <label>Nombre o ID del paciente</label>
-  <input id="input-paciente" type="text" value="Don Ramiro" />
-  <label>Procedimiento</label>
-  <select id="input-procedimiento">
-    <option>Apendicectomía</option>
-    <option>Colecistectomía</option>
-    <option>Colectomía</option>
-    <option>Reemplazo de cadera/rodilla</option>
-    <option>Mastectomía</option>
-  </select>
+  <!-- El procedimiento NO se elige: se deduce del paciente al que se llama. Es un dato de
+       su historia clínica, y es la razón por la que existe la llamada. Elegirlo a mano
+       invertía la causalidad y dejaba pasar un error mudo: un procedimiento equivocado
+       filtra el RAG contra el corpus que no es, y nada avisa. -->
+  <label>Paciente</label>
+  <select id="input-paciente-registro"></select>
+  <p id="ficha-paciente" class="nota-ficha"></p>
+
+  <!-- Escotilla para la demostración de G5: Rinoplastia no está en el corpus ni en el
+       registro a propósito, porque el agente tiene que empezar sin saber nada de ella. -->
+  <div id="bloque-manual" class="oculto">
+    <label>Nombre del paciente</label>
+    <input id="input-paciente" type="text" value="Don Ramiro" />
+    <label>Procedimiento</label>
+    <select id="input-procedimiento"></select>
+  </div>
+
   <label>Día postoperatorio</label>
   <select id="input-dia">
     <option value="1">1</option>

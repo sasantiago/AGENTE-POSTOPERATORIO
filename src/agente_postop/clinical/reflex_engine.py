@@ -12,6 +12,7 @@ from agente_postop.clinical.reflex_rules import (
     FIEBRE_UMBRAL_C,
     REGLAS_COMUNES,
     REGLAS_POR_PROCEDIMIENTO,
+    esta_negado,
     extraer_temperatura_c,
     normalizar,
 )
@@ -22,7 +23,12 @@ def evaluar_via_refleja(texto_paciente: str, procedimiento: str) -> BanderaRefle
     texto_normalizado = normalizar(texto_paciente)
 
     for regla in reglas:
-        if regla.patron.search(texto_normalizado):
+        for match in regla.patron.finditer(texto_normalizado):
+            # `finditer` y no `search`: si la primera aparición del término está negada
+            # («no le sale nada de pus, pero ayer sí salió pus»), hay que seguir mirando
+            # el resto del turno en vez de descartar la regla entera.
+            if esta_negado(texto_normalizado, match.start()):
+                continue
             return BanderaRefleja(
                 disparada=True,
                 criticidad_forzada=Criticidad.ROJO,

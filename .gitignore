@@ -33,3 +33,11 @@ vault/
 # Node (consola web, si aplica)
 node_modules/
 dist/
+
+# Log de turnos del servidor: se regenera en cada sesión y es local a quien lo corre.
+# Lo que se reporta en el README sale de aquí, pero el archivo en sí no se versiona.
+agente_postop.log
+
+# Centinela del script de arranque (iniciar.bat / iniciar.sh): marca que las
+# dependencias ya se instalaron en este entorno.
+.dependencias_ok

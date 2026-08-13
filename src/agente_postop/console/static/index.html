@@ -39,11 +39,62 @@
   .btn-eliminar:hover { background: rgba(224, 120, 95, 0.12); }
 
   #consulta-inspector {
-    width: 65%; padding: 0.6rem 0.9rem; border-radius: 10px; border: 1px solid #d8d3c6;
+    width: 45%; padding: 0.6rem 0.9rem; border-radius: 10px; border: 1px solid #d8d3c6;
     font-family: inherit; font-size: 0.9rem;
   }
+  #proc-inspector {
+    padding: 0.6rem 0.7rem; border-radius: 10px; border: 1px solid #d8d3c6;
+    font-family: inherit; font-size: 0.88rem; background: white; color: var(--ink);
+  }
+  #ambito-inspector { margin: 0.6rem 0 0.2rem; }
   .chunk { background: rgba(255,255,255,0.6); padding: 0.7rem 0.9rem; margin: 0.5rem 0; border-radius: 12px; font-size: 0.85rem; line-height: 1.5; border: 1px solid rgba(0,0,0,0.04); }
   .chunk strong { color: var(--sage-deep); }
+
+  /* --- bandeja clínica --------------------------------------------- */
+  .fila-llamada { cursor: pointer; }
+  .fila-llamada:hover { background: rgba(255,255,255,0.55); }
+  .fila-llamada[aria-expanded="true"] { background: rgba(255,255,255,0.75); }
+
+  /* La criticidad se codifica en color Y en una barra lateral: en una bandeja clínica
+     lo urgente tiene que leerse de un vistazo, y el color solo no basta para daltonismo. */
+  .fila-llamada td:first-child { border-left: 4px solid transparent; padding-left: 0.7rem; }
+  .c-rojo td:first-child { border-left-color: var(--rojo); }
+  .c-amarillo td:first-child { border-left-color: var(--amarillo); }
+  .c-desconocida td:first-child { border-left-color: var(--ink-soft); }
+  .c-verde td:first-child { border-left-color: var(--verde); }
+
+  .insignia {
+    display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em;
+    text-transform: uppercase; padding: 0.16rem 0.5rem; border-radius: 999px;
+    background: rgba(0,0,0,0.05); color: var(--ink-soft); white-space: nowrap;
+  }
+  .c-rojo .insignia { background: rgba(224,120,95,0.18); color: #a3492f; }
+  .c-amarillo .insignia { background: rgba(230,194,107,0.25); color: #7d6415; }
+  .c-verde .insignia { background: rgba(129,178,154,0.22); color: var(--sage-deep); }
+
+  .detalle-llamada { display: none; }
+  .detalle-llamada.abierta { display: table-row; }
+  .detalle-llamada > td { background: rgba(255,255,255,0.5); padding: 1rem 1.1rem 1.2rem; }
+
+  .sbar { display: grid; gap: 0.7rem; margin: 0 0 1rem; }
+  .sbar div { font-size: 0.86rem; line-height: 1.55; }
+  .sbar dt {
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--sage-deep); font-weight: 700; margin-bottom: 0.15rem;
+  }
+  .md {
+    background: rgba(255,255,255,0.75); border: 1px solid rgba(0,0,0,0.06); border-radius: 12px;
+    padding: 0.9rem 1rem; max-height: 22rem; overflow: auto;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.78rem; line-height: 1.6; white-space: pre-wrap; color: var(--ink);
+  }
+  .acciones-detalle { display: flex; gap: 0.6rem; align-items: center; margin-top: 0.8rem; flex-wrap: wrap; }
+  .acciones-detalle a, .acciones-detalle button {
+    font-size: 0.82rem; font-weight: 600; text-decoration: none; padding: 0.45rem 0.9rem;
+    border-radius: 10px; border: 1px solid var(--sage-soft); color: var(--sage-deep);
+    background: transparent; cursor: pointer;
+  }
+  .vacio { color: var(--ink-soft); font-size: 0.87rem; margin: 0.2rem 0 0; }
 </style>
 </head>
 <body>
@@ -53,9 +104,21 @@
     <div id="orbe-mini"></div>
     <div>
       <h1>Consola de administración</h1>
-      <p>Conocimiento clínico — subir, listar, eliminar, inspeccionar</p>
+      <p>Bandeja clínica y base de conocimiento</p>
     </div>
   </div>
+
+  <section class="tarjeta glass-card">
+    <h2>Llamadas — quién necesita atención</h2>
+    <button id="btn-refrescar-llamadas">Refrescar</button>
+    <table>
+      <thead>
+        <tr><th>Paciente</th><th>Procedimiento</th><th>Día</th><th>Criticidad</th><th>Cobertura</th><th>Cierre</th></tr>
+      </thead>
+      <tbody id="tabla-llamadas"></tbody>
+    </table>
+    <p id="sin-llamadas" class="vacio">Sin llamadas registradas todavía.</p>
+  </section>
 
   <section class="tarjeta glass-card">
     <h2>Subir documento</h2>
@@ -79,7 +142,9 @@
   <section class="tarjeta glass-card">
     <h2>Inspector — ¿qué sabe el agente sobre X?</h2>
     <input type="text" id="consulta-inspector" placeholder="Escribe una pregunta clínica..." />
+    <select id="proc-inspector" title="Ámbito de la búsqueda"></select>
     <button id="btn-inspeccionar">Consultar</button>
+    <p id="ambito-inspector" class="vacio"></p>
     <div id="resultados-inspector"></div>
   </section>
 
@@ -134,18 +199,121 @@ document.getElementById('form-subida').addEventListener('submit', async (e) => {
   refrescarDocumentos();
 });
 
+async function cargarProcedimientos() {
+  const res = await fetch('/api/consola/procedimientos');
+  const { procedimientos } = await res.json();
+  const sel = document.getElementById('proc-inspector');
+  // El ámbito por defecto es una llamada concreta, no el índice completo: buscar sin filtro
+  // devuelve siempre los mejores N del corpus entero, que es justo lo que ninguna llamada ve.
+  sel.innerHTML = procedimientos.map(p => `<option value="${p}">${p}</option>`).join('')
+    + '<option value="">— todo el índice (auditoría) —</option>';
+}
+
 document.getElementById('btn-inspeccionar').addEventListener('click', async () => {
   const consulta = document.getElementById('consulta-inspector').value;
   if (!consulta) return;
-  const res = await fetch(`/api/consola/inspector?consulta=${encodeURIComponent(consulta)}`);
+  const procedimiento = document.getElementById('proc-inspector').value;
+  const url = `/api/consola/inspector?consulta=${encodeURIComponent(consulta)}`
+    + (procedimiento ? `&procedimiento=${encodeURIComponent(procedimiento)}` : '');
+  const res = await fetch(url);
   const data = await res.json();
+
+  document.getElementById('ambito-inspector').textContent = procedimiento
+    ? `Ámbito: lo que vería una llamada de ${procedimiento}.`
+    : 'Ámbito: índice completo — útil para auditar el corpus, pero no representa ninguna llamada.';
+
   const div = document.getElementById('resultados-inspector');
   div.innerHTML = data.resultados.length
     ? data.resultados.map(r => `<div class="chunk"><strong>${r.documento}</strong> (${r.chunk_id}, relevancia=${r.relevancia.toFixed(3)})<br>${r.texto.slice(0, 300)}...</div>`).join('')
-    : '<p>Sin resultados — el agente no tiene información sobre eso.</p>';
+    : `<p>Sin resultados${procedimiento ? ` — el agente no sabe nada sobre eso en una llamada de ${procedimiento}.` : ' — el agente no tiene información sobre eso.'}</p>`;
 });
 
+cargarProcedimientos();
+
+// --- bandeja clínica -------------------------------------------------------
+const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+// El resumen y el SBAR llevan texto textual del paciente. Va al DOM escapado: nada de lo
+// que alguien diga en una llamada puede terminar interpretándose como marcado.
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ESCAPES[c]);
+
+function filaDetalle(colspan) {
+  const tr = document.createElement('tr');
+  tr.className = 'detalle-llamada';
+  tr.innerHTML = `<td colspan="${colspan}">Cargando…</td>`;
+  return tr;
+}
+
+async function pintarDetalle(td, paciente, indice) {
+  const res = await fetch(`/api/consola/llamadas/${encodeURIComponent(paciente)}/${indice}`);
+  if (!res.ok) { td.textContent = 'No se pudo cargar el detalle.'; return; }
+  const d = await res.json();
+
+  const sbar = d.sbar
+    ? `<dl class="sbar">
+         <div><dt>Situación</dt>${esc(d.sbar.situacion)}</div>
+         <div><dt>Contexto</dt>${esc(d.sbar.contexto)}</div>
+         <div><dt>Evaluación</dt>${esc(d.sbar.evaluacion)}</div>
+         <div><dt>Recomendación</dt>${esc(d.sbar.recomendacion)}</div>
+       </dl>`
+    : '<p class="vacio">Esta llamada no generó SBAR — no hubo criticidad amarilla ni roja.</p>';
+
+  td.innerHTML = `${sbar}
+    <div class="md">${esc(d.resumen_markdown)}</div>
+    <div class="acciones-detalle">
+      <a href="/api/consola/llamadas/${encodeURIComponent(paciente)}/${indice}/markdown">Descargar .md</a>
+      <button type="button" class="btn-copiar">Copiar resumen</button>
+      <span class="vacio js-copiado"></span>
+    </div>`;
+
+  td.querySelector('.btn-copiar').addEventListener('click', async () => {
+    await navigator.clipboard.writeText(d.resumen_markdown);
+    td.querySelector('.js-copiado').textContent = 'Copiado al portapapeles';
+  });
+}
+
+async function refrescarLlamadas() {
+  const res = await fetch('/api/consola/llamadas');
+  const { llamadas } = await res.json();
+  const tbody = document.getElementById('tabla-llamadas');
+  tbody.innerHTML = '';
+  document.getElementById('sin-llamadas').style.display = llamadas.length ? 'none' : 'block';
+
+  for (const ll of llamadas) {
+    const tr = document.createElement('tr');
+    tr.className = `fila-llamada c-${ll.criticidad}`;
+    tr.setAttribute('aria-expanded', 'false');
+    tr.setAttribute('tabindex', '0');
+    tr.innerHTML = `<td>${esc(ll.paciente_id)}</td>
+      <td>${esc(ll.procedimiento) || '—'}</td>
+      <td>${ll.dia_postop}</td>
+      <td><span class="insignia">${esc(ll.criticidad)}</span></td>
+      <td>${Math.round(ll.cobertura * 100)}%</td>
+      <td>${esc(ll.motivo_cierre.replace(/_/g, ' '))}</td>`;
+
+    const detalle = filaDetalle(6);
+    tbody.appendChild(tr);
+    tbody.appendChild(detalle);
+
+    let cargado = false;
+    const alternar = async () => {
+      const abierta = detalle.classList.toggle('abierta');
+      tr.setAttribute('aria-expanded', String(abierta));
+      if (abierta && !cargado) {
+        cargado = true;
+        await pintarDetalle(detalle.querySelector('td'), ll.paciente_id, ll.indice);
+      }
+    };
+    tr.addEventListener('click', alternar);
+    tr.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); alternar(); }
+    });
+  }
+}
+
+document.getElementById('btn-refrescar-llamadas').addEventListener('click', refrescarLlamadas);
+
 refrescarDocumentos();
+refrescarLlamadas();
 </script>
 </body>
 </html>

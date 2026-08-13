@@ -10,8 +10,10 @@ el harness llama por cada fila del dataset (bypaseando el micrófono).
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 from agente_postop.clinical.citation_validator import validar_respuesta
 from agente_postop.clinical.estado import EstadoClinicoLlamada, a_dict_trajectory_twin, fusionar_extraccion
@@ -19,6 +21,7 @@ from agente_postop.clinical.extraction import a_extraccion_turno
 from agente_postop.clinical.fusion import fusionar
 from agente_postop.clinical.memory import contexto_apertura
 from agente_postop.clinical.models import Criticidad, ResultadoTurno
+from agente_postop.clinical.pacientes import buscar_paciente
 from agente_postop.clinical.reflex_engine import evaluar_via_refleja
 from agente_postop.clinical.sbar import construir_sbar
 from agente_postop.clinical.trajectory_twin import Desviacion, comparar, trayectoria_esperada
@@ -31,6 +34,26 @@ _ACCIONES_POR_CRITICIDAD = {
     Criticidad.AMARILLO: "Se registra su reporte para seguimiento cercano del equipo médico; si algo empeora antes de la próxima llamada, contacte a urgencias.",
     Criticidad.DESCONOCIDA: "No se pudo confirmar toda la información necesaria en esta llamada; se deja registrado para revisión del equipo.",
 }
+
+
+def _comorbilidades_de(paciente_id: str) -> str | None:
+    """Del registro clínico. Un paciente que no esté en él no rompe la llamada: el SBAR
+    dirá "ninguna registrada", que es exactamente lo que se sabe."""
+    paciente = buscar_paciente(paciente_id)
+    return paciente.texto_comorbilidades if paciente else None
+
+
+def _texto_confirmado(estado: EstadoClinicoLlamada) -> str | None:
+    """Lo ya confirmado, con la frase textual que lo sustenta, para que la vía cortical
+    pueda replicar ante una retractación en vez de darla por buena. El verbatim importa:
+    citarle al paciente sus propias palabras es lo que distingue contradecirlo de
+    recordarle lo que dijo."""
+    partes = []
+    for nombre in estado.dimensiones_confirmadas:
+        obs = getattr(estado, nombre)
+        soporte = f' (dijo: "{obs.verbatim}")' if obs.verbatim else ""
+        partes.append(f"{nombre}={obs.valor}{soporte}")
+    return "; ".join(partes) if partes else None
 
 
 def _desviaciones_relevantes(
@@ -75,6 +98,7 @@ def orquestar_turno(
     # Snapshot del estado ANTES de este turno — es lo que ve la llamada B, porque corre en
     # paralelo con la extracción de este mismo turno, no después de ella.
     dimensiones_pendientes_previas = estado_clinico.dimensiones_pendientes
+    ya_confirmado_previo = _texto_confirmado(estado_clinico)
     sintomas_previos = a_dict_trajectory_twin(estado_clinico)
     _, desviaciones_texto_previas = _desviaciones_relevantes(
         paciente_id, procedimiento, dia_postop, sintomas_previos, turno_idx
@@ -82,17 +106,27 @@ def orquestar_turno(
 
     # Llamada A (extracción) y B (conversación) en paralelo — independientes entre sí
     # dentro del mismo turno; correrlas una detrás de la otra solo suma latencia.
+    # `copy_context().run` para que el cronómetro del turno (un contextvar, ver
+    # orchestrator/metrics.py) siga vivo dentro de los hilos: ThreadPoolExecutor no
+    # propaga el contexto por su cuenta, y sin esto las etapas `rag` y `llm_*` se medirían
+    # contra una medición inexistente y se perderían.
+    # Una copia por hilo: un mismo objeto Context no puede entrarse dos veces a la vez.
+    tarea_extraccion = partial(extraer_turno, turno_paciente=turno_paciente, historial_turno=historial_turno)
+    tarea_conversacion = partial(
+        generar_respuesta,
+        turno_paciente=turno_paciente,
+        procedimiento=procedimiento,
+        contexto_memoria=contexto_memoria,
+        desviaciones_trayectoria=desviaciones_texto_previas,
+        historial_turno=historial_turno,
+        dimensiones_pendientes=dimensiones_pendientes_previas,
+        reflejo_disparado=bandera_reflejo.disparada,
+        ya_confirmado=ya_confirmado_previo,
+    )
+
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futuro_extraccion = pool.submit(extraer_turno, turno_paciente=turno_paciente, historial_turno=historial_turno)
-        futuro_conversacion = pool.submit(
-            generar_respuesta,
-            turno_paciente=turno_paciente,
-            procedimiento=procedimiento,
-            contexto_memoria=contexto_memoria,
-            desviaciones_trayectoria=desviaciones_texto_previas,
-            historial_turno=historial_turno,
-            dimensiones_pendientes=dimensiones_pendientes_previas,
-        )
+        futuro_extraccion = pool.submit(contextvars.copy_context().run, tarea_extraccion)
+        futuro_conversacion = pool.submit(contextvars.copy_context().run, tarea_conversacion)
 
         try:
             delta = a_extraccion_turno(futuro_extraccion.result())
@@ -130,7 +164,10 @@ def orquestar_turno(
             dia_postop=dia_postop,
             motivo_alerta=motivo,
             contexto_previo=contexto_memoria,
-            comorbilidades=None,
+            # Estaba fijo en None, así que todo SBAR decía "Comorbilidades: ninguna
+            # registrada" — incluso para un paciente con obesidad e hipertensión, que es
+            # justo el contexto que cambia la lectura de una alerta postoperatoria.
+            comorbilidades=_comorbilidades_de(paciente_id),
             sintomas_reportados={k: str(v) for k, v in sintomas_extraidos.items()},
             criticidad_final=criticidad_final,
             bandera_reflejo=bandera_reflejo,

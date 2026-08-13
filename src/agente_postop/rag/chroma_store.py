@@ -26,6 +26,18 @@ from agente_postop.rag.embeddings import embeber_consulta, embeber_pasajes
 NOMBRE_COLECCION = "conocimiento_clinico"
 RRF_K = 60
 
+# Estas dos etiquetas de `procedimiento` no nombran un procedimiento clínico: nombran el
+# canal por el que entró el documento (el vault vigilado y la subida desde la consola). El
+# conocimiento que se sube en caliente no pertenece a un procedimiento del corpus original,
+# así que toda consulta filtrada tiene que incluirlas además de su propia etiqueta.
+#
+# Sin eso, G5 queda partido por la mitad: el documento se indexa y aparece en el inspector
+# de la consola, pero el filtro `where` de la llamada lo excluye siempre y el agente nunca
+# llega a usarlo. Subir dejaba de significar aprender.
+ETIQUETA_VAULT = "vault"
+ETIQUETA_CONSOLA = "general"
+ETIQUETAS_CONOCIMIENTO_SUBIDO = (ETIQUETA_VAULT, ETIQUETA_CONSOLA)
+
 
 @lru_cache
 def get_chroma_client() -> chromadb.ClientAPI:

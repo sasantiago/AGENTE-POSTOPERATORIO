@@ -23,7 +23,7 @@ from agente_postop.config import get_settings
 from agente_postop.ingestion.chunking import chunkear_markdown
 from agente_postop.ingestion.docling_pipeline import convertir_a_markdown
 from agente_postop.ingestion.hashing import hash_archivo
-from agente_postop.rag.chroma_store import ChunkParaIndexar, eliminar_documento, indexar_chunks
+from agente_postop.rag.chroma_store import ETIQUETA_VAULT, ChunkParaIndexar, eliminar_documento, indexar_chunks
 
 EXTENSIONES_SOPORTADAS = {".pdf", ".docx", ".md", ".txt"}
 
@@ -45,7 +45,7 @@ def _indexar(ruta: Path) -> None:
             texto=chunk.texto,
             documento=ruta.name,
             hash_contenido=doc.hash_contenido,
-            procedimiento="vault",
+            procedimiento=ETIQUETA_VAULT,
             version=1,
         )
         for chunk in chunks

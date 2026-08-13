@@ -53,8 +53,23 @@ def construir_sbar(
         else "Sin bandera refleja disparada; criticidad determinada por la vía cortical."
     )
 
+    # El dict se formatea a prosa en vez de interpolarse crudo: esto lo lee personal
+    # clínico en un traspaso, y `{'dolor_nrs': '3', 'herida': 'eritema_leve'}` obliga a
+    # leer sintaxis de Python en mitad de una alerta médica.
+    _NOMBRE_SINTOMA = {
+        "dolor_nrs": "dolor (NRS)",
+        "fiebre_c": "fiebre (°C)",
+        "movilidad": "movilidad",
+        "herida": "herida",
+        "apetito": "apetito",
+        "sueno": "sueño",
+    }
+    sintomas_txt = ", ".join(
+        f"{_NOMBRE_SINTOMA.get(clave, clave)}: {valor}" for clave, valor in sintomas_reportados.items()
+    ) or "ninguno confirmado durante la llamada"
+
     evaluacion = (
-        f"Síntomas reportados: {sintomas_reportados}. Criticidad asignada: {criticidad_final.value}. "
+        f"Síntomas reportados — {sintomas_txt}. Criticidad asignada: {criticidad_final.value}. "
         f"Desviación vs. trayectoria esperada: {desviaciones_txt}. {bandera_txt} "
         f"Referencias: {referencias_txt}"
     )

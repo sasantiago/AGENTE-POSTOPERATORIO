@@ -17,7 +17,20 @@ MODELO_EMBEDDINGS = "intfloat/multilingual-e5-base"
 
 @lru_cache
 def _modelo() -> SentenceTransformer:
-    return SentenceTransformer(MODELO_EMBEDDINGS)
+    """Carga primero desde el caché en disco, y solo descarga si no está.
+
+    Sin el intento local, sentence-transformers consulta huggingface.co para ver si hay una
+    versión más nueva AUNQUE el modelo ya esté en disco. Con la red caída eso no falla
+    rápido: son ~45 s de reintentos con backoff antes de rendirse y usar el caché. Medido.
+
+    No hace falta que la red esté ausente para pagarlo — basta con que esté inestable, que
+    es el caso normal del wifi de una sala de demos. Y 45 s en mitad de una llamada de voz
+    no es una demora, es la llamada perdida.
+    """
+    try:
+        return SentenceTransformer(MODELO_EMBEDDINGS, local_files_only=True)
+    except Exception:  # noqa: BLE001 — primera ejecución: no está en caché, hay que bajarlo
+        return SentenceTransformer(MODELO_EMBEDDINGS)
 
 
 def embeber_pasajes(textos: list[str]) -> list[list[float]]:

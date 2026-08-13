@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from agente_postop.clients import get_groq_client
 from agente_postop.config import get_settings
 from harness.report import (
     falsos_negativos_rojo,
@@ -31,20 +30,44 @@ from harness.reproducer import _cargar_dataset
 from harness.runner import correr_casos
 
 USOS_TOKENS: list[tuple[int, int]] = []
+USOS_POR_PROVEEDOR: dict[str, list[tuple[int, int]]] = {"groq": [], "gemini": []}
 
 
 def _instrumentar_tokens() -> None:
-    cliente = get_groq_client()
-    original_create = cliente.chat.completions.create
+    """Envuelve las dos vías de salida del orquestador. Se parchea sobre el módulo `cortex`
+    y no sobre `clients`, porque cortex importó las funciones por nombre y conserva su
+    propia referencia — reemplazarlas en `clients` no lo tocaría.
 
-    def wrapped(*args, **kwargs):
-        resp = original_create(*args, **kwargs)
+    El desglose por proveedor no es cosmético: el cupo de Groq y el de Gemini son
+    presupuestos separados, y el punto de mandar la extracción a Gemini es justamente que
+    dejen de competir. Un total agregado escondería si el reparto está funcionando.
+    """
+    import agente_postop.orchestrator.cortex as cortex
+
+    original_groq = cortex.crear_completado
+    original_gemini = cortex.generar_json_gemini
+
+    def groq_instrumentado(*args, **kwargs):
+        resp = original_groq(*args, **kwargs)
         usage = getattr(resp, "usage", None)
         if usage is not None:
-            USOS_TOKENS.append((usage.prompt_tokens, usage.completion_tokens))
+            par = (usage.prompt_tokens, usage.completion_tokens)
+            USOS_TOKENS.append(par)
+            USOS_POR_PROVEEDOR["groq"].append(par)
         return resp
 
-    cliente.chat.completions.create = wrapped
+    def gemini_instrumentado(*args, **kwargs):
+        # El SDK de Gemini devuelve texto plano, no un objeto con `usage`. Se estima por
+        # longitud: sirve para ver el reparto entre presupuestos, no para facturar.
+        texto = original_gemini(*args, **kwargs)
+        entrada = len(kwargs.get("instruccion_sistema", "")) + len(kwargs.get("prompt_usuario", ""))
+        par = (round(entrada / 3.7), round(len(texto) / 3.7))
+        USOS_TOKENS.append(par)
+        USOS_POR_PROVEEDOR["gemini"].append(par)
+        return texto
+
+    cortex.crear_completado = groq_instrumentado
+    cortex.generar_json_gemini = gemini_instrumentado
 
 
 def seleccionar_casos(n_rojo: int, n_amarillo: int, n_verde: int, seed: int) -> list[str]:
@@ -103,6 +126,12 @@ def main() -> None:
         print(f"Tokens de salida por turno — media: {statistics.mean(completion_tokens):.0f}, "
               f"P50: {statistics.median(completion_tokens):.0f}")
         print(f"Invocaciones al modelo (llamadas al LLM): {len(USOS_TOKENS)}")
+        for proveedor, usos in USOS_POR_PROVEEDOR.items():
+            if usos:
+                print(
+                    f"  · {proveedor:<7}: {len(usos):>4} llamadas | "
+                    f"{sum(p for p, _ in usos):>8,} tok entrada | {sum(c for _, c in usos):>7,} tok salida"
+                )
 
     print(f"\nDuración total del run: {duracion_total:.1f}s")
 
@@ -118,6 +147,14 @@ def main() -> None:
         "tokens_entrada": USOS_TOKENS and [p for p, _ in USOS_TOKENS],
         "tokens_salida": USOS_TOKENS and [c for _, c in USOS_TOKENS],
         "n_invocaciones_llm": len(USOS_TOKENS),
+        "tokens_por_proveedor": {
+            proveedor: {
+                "n_llamadas": len(usos),
+                "tokens_entrada": sum(p for p, _ in usos),
+                "tokens_salida": sum(c for _, c in usos),
+            }
+            for proveedor, usos in USOS_POR_PROVEEDOR.items()
+        },
         "duracion_total_s": duracion_total,
         "resultados": [
             {
