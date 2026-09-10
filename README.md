@@ -25,9 +25,9 @@ Contexto del reto, reglas de evaluación y dataset original: [`docs/reto-origina
 
 | Pieza | Herramienta | Por qué |
 |---|---|---|
-| LLM (razonamiento de la llamada) | Llama 3.3 70B vía Groq | Cumple G3 (familia Meta Llama, nivel gratuito); latencia mínima por LPU |
-| LLM (extracción clínica del turno) | Gemini Flash | Cumple G3 (familia Google Gemini, gama Flash, nivel gratuito). Tarea de esquema cerrado que no requiere el 70B, y su cupo es un presupuesto **separado** del de Groq: las dos llamadas del turno dejan de competir por el mismo límite diario |
-| STT | Groq Whisper Large V3 | Mismo proveedor que el LLM, menos saltos de red |
+| LLM (conversación y extracción) | **Llama 3.2 3B en local, vía Ollama** | Cumple G3 (familia Meta Llama local, serie 3.x 1B–3B). Sin credenciales, sin cupos, sin depender de que un proveedor lo siga sirviendo — ver "Por qué local" |
+| LLM (respaldo) | Gemini Flash | Cumple G3 (familia Google Gemini, gama Flash). Entra solo si Ollama no responde, para que una llamada no muera por no tener modelo |
+| STT | Groq Whisper Large V3 | `whisper-large-v3` sigue disponible en el nivel gratuito y es lo único que se le pide a Groq |
 | TTS | Piper (voz `es_MX`, local) | Local, gratis, sin límite de minutos. Se evaluó Kokoro-82M y se descartó: Piper sintetiza la respuesta completa en ~1s en CPU (medido), suficiente para el turno |
 | RAG | ChromaDB + `multilingual-e5-base` (búsqueda híbrida: vectorial + BM25) | Local, gratis; e5-base (~1.1GB) en vez de BGE-M3 (4.3GB) para no comprometer la compuerta de 15 minutos — BM25 recupera el margen de precisión en términos exactos (dosis, fármacos) que un embedding más chico puede difuminar |
 | Ingesta | Docling | Un solo camino a Markdown para cualquier archivo, con OCR |
@@ -36,16 +36,54 @@ Contexto del reto, reglas de evaluación y dataset original: [`docs/reto-origina
 Claude Code se usó como asistente de desarrollo (nunca como el LLM que razona en la
 llamada — ver `docs/informe-final.md` una vez redactado).
 
+## Por qué el modelo corre en local
+
+El 6 de septiembre de 2026, a mitad del desarrollo, **Groq dejó de servir todo modelo
+Llama generativo en su nivel gratuito**: `llama-3.3-70b-versatile` empezó a devolver 404 y
+la cuenta pasó a listar solo los clasificadores `prompt-guard`. El agente se quedó sin con
+qué razonar, de un día para otro y sin aviso. Google había hecho lo mismo antes con
+`gemini-2.0-flash` y `gemini-2.5-flash` ("no longer available to new users").
+
+La lección no es que un proveedor concreto sea poco fiable. Es que en una demostración
+cronometrada y evaluada, **depender de que un tercero siga sirviendo hoy el modelo que
+servía ayer es un riesgo que no hace falta correr.** Los pesos en disco no los retira nadie.
+
+Por eso el razonamiento pasó a **Llama 3.2 3B en local vía Ollama**, con Gemini Flash como
+respaldo automático. La solución arranca **sin una sola clave de API**, y si Ollama no está
+corriendo la llamada cae a la nube en vez de morir. `config.py` **aborta el arranque** si
+el modelo configurado no pertenece a una familia permitida por G3, comprobando también el
+tamaño: `llama3.1:8b` se rechaza, `llama3.2:3b` se acepta. La compuerta se defiende con
+código, no con disciplina.
+
+**Lo que esa elección cuesta, medido** (mediana de 3 turnos, portátil i9-13900H sin GPU):
+
+| Backend | Por llamada al LLM | Turno completo | A cambio de |
+|---|---:|---:|---|
+| `ollama` (Llama 3.2 3B, local) | 12,3 s | 13–16 s | cero credenciales; el audio del paciente no sale del equipo |
+| `gemini` (Flash, nube) | 5,8 s | ~7 s | depende de red y de que el proveedor siga sirviendo |
+
+El techo local de esa máquina son ~5,5 tokens/s, y el límite es **ancho de banda de
+memoria, no CPU**: fijar `num_thread` en 6, 10, 14 o 20 no movió la cifra, y Ollama no
+aprovecha la iGPU Intel. En un equipo con GPU dedicada el reparto cambia por completo.
+Intercambiar `LLM_BACKEND` y `LLM_FALLBACK` invierte la cadena sin tocar código.
+
+Lo que hace viable un modelo de 3B es que **ya no decide nada clínico**: el triaje es
+determinista y el modelo solo rellena campos tipados, con el JSON Schema puesto en el
+decodificador (`format`), que le impide omitir un campo o salirse de un enum.
+
 ## Requisitos previos
 
 - **Python 3.11.** No 3.12 ni 3.13: `chroma-hnswlib` —dependencia de ChromaDB— solo publica
   wheels precompilados hasta cp311, así que con versiones más nuevas pip intenta compilar
   desde fuente y exige un toolchain de C++ (Visual C++ Build Tools en Windows).
-- **Dos claves de API, ambas de nivel gratuito:**
-  [Groq](https://console.groq.com/keys) para la conversación y
-  [Google AI Studio](https://aistudio.google.com/apikey) para la extracción clínica. Sus
-  cupos diarios son presupuestos separados — ver "Continuidad del servicio".
-- ~4 GB libres en disco y conexión a internet en el primer arranque.
+- **[Ollama](https://ollama.com/download)** y el modelo: `ollama pull llama3.2:3b` (~2 GB).
+  Es local y gratis, **no requiere cuenta ni registro**.
+- **Ninguna clave de API es obligatoria.** Opcionalmente:
+  [Google AI Studio](https://aistudio.google.com/apikey) para el respaldo en la nube, y
+  [Groq](https://console.groq.com/keys) para el reconocimiento de voz (`whisper-large-v3`,
+  que sigue disponible). Sin la de Groq el agente razona igual; lo que se pierde es el
+  habla del paciente, no la lógica clínica.
+- ~6 GB libres en disco y conexión a internet en el primer arranque.
 
 ## Instalación (≤15 minutos)
 
@@ -163,13 +201,97 @@ src/agente_postop/
 ├── ingestion/            # Docling → Markdown → chunking → ChromaDB
 ├── rag/                  # embeddings e5-base, recuperación híbrida (vectorial + BM25)
 ├── voice/                # STT, TTS, fillers cacheados
-├── clinical/             # extracción, estado de la llamada, arco reflejo, gemelo de trayectoria, memoria, SBAR, validador de citas
+├── clinical/             # extracción, estado de la llamada, motor de triaje, arco reflejo, gemelo de trayectoria, memoria, SBAR, validador de citas
 ├── orchestrator/         # FastAPI + WebSocket, gestor de turno
 └── console/               # consola de administración (subir/listar/eliminar)
-harness/                  # evaluación contra dataset_final.xlsx
+harness/                  # eval_triaje.py (motor, 160 casos, sin tokens) · run_eval.py (sistema completo, muestra)
 tests/adversarial/        # suite de inyección de prompt y entradas hostiles
 vault/                    # carpeta vigilada (ingesta tipo Obsidian)
 ```
+
+## Qué hace el modelo, y qué no
+
+El agente conduce la llamada con un **guion fijo** de seis preguntas
+([`clinical/guion.py`](src/agente_postop/clinical/guion.py)), pre-sintetizadas a audio. Un
+protocolo postoperatorio no debe improvisar sus preguntas: que sean idénticas en cada
+llamada es un requisito clínico, no una limitación. Y como el agente sabe qué acaba de
+preguntar, solo necesita extraer **esa** dimensión.
+
+| Tarea | Quién la resuelve | Por qué |
+|---|---|---|
+| Temperatura y dolor | Parser determinista ([`clinical/parsers.py`](src/agente_postop/clinical/parsers.py)) | Son 2 de las 3 reglas que disparan rojo. **0 errores peligrosos** sobre 3.991 turnos |
+| Los 4 slots categóricos | LLM, salida estructurada, **una invocación por slot** | Enum de 3 valores: la tarea que un modelo pequeño sí hace bien |
+| **Decisión de escalar** | **Regla determinista** ([`clinical/triage.py`](src/agente_postop/clinical/triage.py)) | Auditable, testeable y explicable a un clínico |
+| Redacción de las preguntas | Texto fijo, audio pre-generado | 2 ms de TTS por turno |
+
+**Lo que costaba hacerlo al revés, medido en el mismo equipo:**
+
+| | Antes | Ahora |
+|---|---:|---:|
+| Extracción por turno | 16,2 s (esquema de 10.126 chars) | **8,1 s** (dirigida, 115 tokens) |
+| TTS por turno | ~1.000 ms | **2 ms** |
+| Invocaciones al modelo por turno | 2 | **0 o 1** |
+| Aciertos de extracción | 1 de 6 slots | **5 de 5** |
+| **Turno completo** | ~16 s | **3,7 s** |
+
+El salto de calidad pesa más que el de latencia: **de 1/6 a 5/5 sin cambiar de modelo**,
+solo cambiando la pregunta. Y dos de cada seis turnos —dolor y fiebre— se resuelven en
+**25 ms sin invocar al modelo en absoluto**, porque los lee un parser.
+
+Llamada completa de ejemplo, reproducible en `agente_postop.log`:
+
+```
+turno criticidad=desconocida regla=cobertura_incompleta               total_ms=25
+turno criticidad=rojo        regla=bandera_refleja                    total_ms=32
+turno criticidad=rojo        regla=fiebre_alta  llm_extraccion=5932   total_ms=5965
+turno criticidad=rojo        regla=fiebre_alta  llm_extraccion=4517   total_ms=4534
+```
+
+## El triaje no lo decide el modelo
+
+La criticidad de un paciente la fija código determinista
+([`clinical/triage.py`](src/agente_postop/clinical/triage.py)), no el LLM. El modelo
+extrae campos tipados y puede aportar una **segunda opinión que solo escala**: si propone
+un nivel más grave que el de las reglas, se toma; si propone uno más benigno, se descarta.
+Nunca puede tranquilizar.
+
+Es un cambio de naturaleza, no de exactitud. Una regla se puede auditar ante un clínico
+("temperatura 38.4 °C ≥ 38.0 °C"), someter a pruebas de regresión, y **evaluar sin gastar
+un solo token**. La salida de un modelo, no. La entrega anterior medía el triaje sobre 14
+casos porque medirlo costaba cupo de Groq; ahora se mide sobre los 160:
+
+```bash
+python -m harness.eval_triaje --ambos-perfiles
+```
+
+| Perfil | Exactitud | Recall de `rojo` | Falsos negativos | FP sobre verde |
+|---|---:|---:|---:|---:|
+| `conservador` (default) | 142/160 (88.8%) | **100%** | **0** | 18 |
+| `optimo` | 157/160 (98.1%) | **100%** | **0** | 3 |
+
+`conservador` es el default pese a su menor exactitud: cambia 15 falsos positivos
+adicionales por margen de seguridad clínica, que es la dirección en la que la rúbrica pide
+equivocarse. Se cambia con `TRIAGE_PROFILE=optimo`. **Ninguno de los dos deja pasar un
+caso grave, y ningún caso queda por debajo de su criticidad real.**
+
+El comando **devuelve código de salida distinto de cero si aparece una sola
+subestimación**: es una prueba de regresión, no un informe. Si alguien afloja un umbral y
+con eso deja de escalar un caso, el build falla.
+
+Los umbrales tampoco son intuiciones. `--calibrar` rehace la búsqueda exhaustiva sobre el
+espacio de pesos: entre las 321 combinaciones que logran recall 100% sobre los 25 casos
+`amarillo`, la que usa el motor es la que menos falsos positivos deja sobre los 123
+`verde` — puesto 1 de 321.
+
+**Lo que este número no dice.** Mide el motor de decisión alimentado con los slots que el
+dataset trae como verdad, es decir, aislado del extractor. Es deliberado: son dos
+preguntas distintas y mezclarlas produce un solo número que no dice cuál de las dos partes
+falló.
+
+| Qué se pregunta | Con qué se mide | Alcance |
+|---|---|---|
+| Dado lo que el paciente **tiene**, ¿el sistema decide bien? | `harness/eval_triaje.py` | 160 casos, sin tokens |
+| Dado lo que el paciente **dice**, ¿el sistema entiende bien? | `harness/run_eval.py` | muestra, limitada por cupo |
 
 ## Métricas (§5 de la rúbrica)
 
@@ -207,10 +329,11 @@ python -m harness.run_eval --n-rojo -1 --n-amarillo 2 --n-verde 0 --capas capa1_
 | Invocaciones al modelo por turno | 2 (extracción + conversación, en paralelo). La vía refleja no usa LLM |
 | Consultas al RAG por llamada | 1 por turno de paciente (4 chunks por consulta) |
 | Costo estimado por llamada (6 turnos) | ≈ USD 0.006 (≈ USD 0.0076 con la arquitectura actual) |
-| Falsos negativos catastróficos (rojo real → verde predicho) | 0 / 72 turnos · **0 / 12 casos colgaron sin escalar** |
-| Recall rojo — por caso, como está etiquetado el dataset | **41.7%** (5/12) · ver nota abajo |
-| Recall rojo — vía refleja sola, 160 casos, tras la calibración | **66.7%** capa1 / 58.3% capa2 |
-| Falsos positivos de la vía refleja sobre casos verde | **0%** (0/123), antes 13% |
+| **Recall de `rojo`** (motor de triaje, 160 casos) | **100%** (12/12) · ver abajo |
+| **Falsos negativos de `rojo`** | **0** |
+| Subestimaciones de cualquier nivel | **0** |
+| Exactitud global (perfil `conservador`, el default) | 142/160 (88.8%) |
+| Exactitud global (perfil `optimo`) | 157/160 (98.1%) |
 
 ### Desglose de latencia por etapa
 
@@ -256,6 +379,14 @@ falsos positivos sobre casos verde. Las dos causas eran concretas: la fiebre se 
 paciente no decía «grados» («me la tomé y marcó como 38»), y la regla `pus` disparaba con la
 negación («no le sale nada de pus»). Detalle en
 [`docs/informe-final.md` §6.1-6.2](docs/informe-final.md); fijado en `tests/test_reflex_rules.py`.
+
+Ese 66.7% es el techo de lo que la vía refleja puede ver **por sí sola**, emparejando
+patrones sobre el habla del paciente. El tercio restante no se recuperaba con más
+expresiones regulares: son casos donde la señal no está en una frase de alarma sino en la
+combinación de valores que el agente ya había recogido. Por eso la decisión pasó a un motor
+que razona sobre los seis slots acumulados y no solo sobre el texto del turno — el reflejo
+sigue ahí, como primera de ocho capas. **Con el motor completo el recall de `rojo` es del
+100% y no hay ninguna subestimación** (tabla arriba).
 
 ## Continuidad del servicio
 

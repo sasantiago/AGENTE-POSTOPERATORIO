@@ -12,18 +12,21 @@ Apendicectomía, Colecistectomía, Colectomía, Reemplazo de cadera/rodilla, Mas
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass
 
+# Una sola implementación de cada una, en `clinical/parsers.py`. Estaban duplicadas aquí:
+# la vía refleja leía la temperatura con su propia copia mientras el slot `fiebre` lo
+# rellenaba el modelo, así que dos caminos leían la misma frase y podían discrepar. Se
+# reexportan porque este módulo era su domicilio original y hay tests que las importan de
+# aquí.
+from agente_postop.clinical.parsers import (  # noqa: F401
+    TEMP_MAX_PLAUSIBLE_C,
+    TEMP_MIN_PLAUSIBLE_C,
+    extraer_temperatura_c,
+    normalizar,
+)
+
 FIEBRE_UMBRAL_C = 38.0
-
-
-def normalizar(texto: str) -> str:
-    """Quita tildes/diacríticos y pasa a minúsculas. Las transcripciones de Whisper no
-    siempre son consistentes con las tildes, y el paciente tampoco las pronuncia — el
-    reflejo no puede depender de que "secreción" esté bien acentuado para dispararse."""
-    descompuesto = unicodedata.normalize("NFD", texto)
-    return "".join(c for c in descompuesto if unicodedata.category(c) != "Mn").lower()
 
 
 @dataclass(frozen=True)
@@ -161,48 +164,3 @@ def esta_negado(texto_normalizado: str, inicio_match: int) -> bool:
     corta = texto_normalizado[max(0, inicio_match - _VENTANA_NEGADOR_CORTO) : inicio_match]
     larga = texto_normalizado[max(0, inicio_match - _VENTANA_FRASE_NEGATIVA) : inicio_match]
     return bool(_NEGADOR_CORTO.search(corta) or _FRASE_NEGATIVA.search(larga))
-
-
-# Rango fisiológicamente plausible para una temperatura corporal reportada por teléfono.
-# Acota el riesgo de leer como fiebre un número que no lo es: la intensidad del dolor
-# («como un 5», «un 6 tal vez») y los días postoperatorios caen todos fuera.
-TEMP_MIN_PLAUSIBLE_C = 35.0
-TEMP_MAX_PLAUSIBLE_C = 42.5
-
-# El paciente casi nunca dice «grados». Dice «me la tomé y marcó 38», «me sentí afiebrada,
-# como 38», «marcaba 39 algo». Exigir la unidad perdía la fiebre entera — y la fiebre es la
-# bandera roja más común del postoperatorio. Medido sobre capa1_limpia del dataset: 5 de los
-# 7 casos `rojo` que la vía refleja no detectaba reportaban una temperatura >= 38 en
-# palabras, sin unidad.
-_CONTEXTO_TERMICO = re.compile(
-    r"temperatura|termometro|fiebre|afiebrad|calentura|grados|°|marc[oa]|febril|"
-    r"escalofri|destemplad"
-)
-_NUMERO_TEMPERATURA = re.compile(r"\b(3[5-9]|4[0-2])(?:[.,](\d))?\b")
-
-
-def extraer_temperatura_c(texto: str) -> float | None:
-    """Temperatura en °C reportada en el turno, o None.
-
-    Acepta la forma explícita («38.5 grados», «38°») y la coloquial («marcó como 38»,
-    «38 y algo»), esta última solo cuando el turno habla de temperatura: sin esa condición,
-    cualquier cifra entre 35 y 42 se leería como fiebre.
-    """
-    normalizado = normalizar(texto)
-
-    explicito = re.search(r"(\d{2}(?:[.,]\d)?)\s*(?:°|grados)", normalizado)
-    if explicito:
-        try:
-            return float(explicito.group(1).replace(",", "."))
-        except ValueError:
-            return None
-
-    if not _CONTEXTO_TERMICO.search(normalizado):
-        return None
-
-    for match in _NUMERO_TEMPERATURA.finditer(normalizado):
-        entero, decimal = match.group(1), match.group(2)
-        valor = float(f"{entero}.{decimal}") if decimal else float(entero)
-        if TEMP_MIN_PLAUSIBLE_C <= valor <= TEMP_MAX_PLAUSIBLE_C:
-            return valor
-    return None

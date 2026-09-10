@@ -1,0 +1,292 @@
+[
+  {
+    "perfil": "conservador",
+    "capa_trayectoria": false,
+    "total": 160,
+    "aciertos": 142,
+    "exactitud": 0.8875,
+    "recall_rojo": 1.0,
+    "falsos_negativos_rojo": 0,
+    "subestimaciones": 0,
+    "falsos_positivos_sobre_verde": 18,
+    "matriz": {
+      "verde->verde": 105,
+      "verde->amarillo": 18,
+      "verde->rojo": 0,
+      "amarillo->verde": 0,
+      "amarillo->amarillo": 25,
+      "amarillo->rojo": 0,
+      "rojo->verde": 0,
+      "rojo->amarillo": 0,
+      "rojo->rojo": 12
+    },
+    "reglas_que_escalaron": {
+      "febricula": 22,
+      "puntaje_sintomatico": 21,
+      "fiebre_alta": 11,
+      "dolor_severo": 1
+    },
+    "fallos": [
+      {
+        "caso": "tray_pac_42_00000_1",
+        "dia_postop": 1,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.5 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00000_7",
+        "dia_postop": 7,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.7 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00002_3",
+        "dia_postop": 3,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.9 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00006_1",
+        "dia_postop": 1,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.6 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00011_1",
+        "dia_postop": 1,
+        "arquetipo": "recuperacion_normal",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "puntaje combinado de síntomas 4 ≥ 4"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00012_1",
+        "dia_postop": 1,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.5 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00012_14",
+        "dia_postop": 14,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.5 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00013_1",
+        "dia_postop": 1,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.6 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00016_3",
+        "dia_postop": 3,
+        "arquetipo": "recuperacion_normal",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "puntaje combinado de síntomas 4 ≥ 4"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00026_3",
+        "dia_postop": 3,
+        "arquetipo": "complicacion_real",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.6 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00027_1",
+        "dia_postop": 1,
+        "arquetipo": "complicacion_real",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.5 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00029_1",
+        "dia_postop": 1,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.6 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00035_1",
+        "dia_postop": 1,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.6 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00035_3",
+        "dia_postop": 3,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.5 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00037_3",
+        "dia_postop": 3,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.7 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00037_7",
+        "dia_postop": 7,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.6 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00038_14",
+        "dia_postop": 14,
+        "arquetipo": "complicacion_leve_vigilancia",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "temperatura 37.6 °C ≥ 37.5 °C"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00039_1",
+        "dia_postop": 1,
+        "arquetipo": "recuperacion_normal",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "puntaje combinado de síntomas 4 ≥ 4"
+        ]
+      }
+    ]
+  },
+  {
+    "perfil": "optimo",
+    "capa_trayectoria": false,
+    "total": 160,
+    "aciertos": 157,
+    "exactitud": 0.9812,
+    "recall_rojo": 1.0,
+    "falsos_negativos_rojo": 0,
+    "subestimaciones": 0,
+    "falsos_positivos_sobre_verde": 3,
+    "matriz": {
+      "verde->verde": 120,
+      "verde->amarillo": 3,
+      "verde->rojo": 0,
+      "amarillo->verde": 0,
+      "amarillo->amarillo": 25,
+      "amarillo->rojo": 0,
+      "rojo->verde": 0,
+      "rojo->amarillo": 0,
+      "rojo->rojo": 12
+    },
+    "reglas_que_escalaron": {
+      "puntaje_sintomatico": 28,
+      "fiebre_alta": 11,
+      "dolor_severo": 1
+    },
+    "fallos": [
+      {
+        "caso": "tray_pac_42_00011_1",
+        "dia_postop": 1,
+        "arquetipo": "recuperacion_normal",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "puntaje combinado de síntomas 4 ≥ 4"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00016_3",
+        "dia_postop": 3,
+        "arquetipo": "recuperacion_normal",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "puntaje combinado de síntomas 4 ≥ 4"
+        ]
+      },
+      {
+        "caso": "tray_pac_42_00039_1",
+        "dia_postop": 1,
+        "arquetipo": "recuperacion_normal",
+        "real": "verde",
+        "predicho": "amarillo",
+        "subestimacion": false,
+        "motivos": [
+          "puntaje combinado de síntomas 4 ≥ 4"
+        ]
+      }
+    ]
+  }
+]

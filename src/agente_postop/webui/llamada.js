@@ -20,6 +20,9 @@ let salidaAnalyser = null;
 let micRafId = null;
 let salidaRafId = null;
 let esperandoRespuesta = false;
+// El agente colgó al terminar el protocolo. Distingue un cierre normal de una caída de
+// conexión, que para el paciente se ven igual y significan cosas muy distintas.
+let llamadaFinalizada = false;
 
 function agregarTurno(texto, esPaciente) {
   const div = document.createElement("div");
@@ -38,12 +41,31 @@ function actualizarCriticidad(nivel) {
   texto.textContent = nivel;
 }
 
-function reproducirFiller() {
-  const archivo = FILLERS[Math.floor(Math.random() * FILLERS.length)];
-  const audio = new Audio(`/fillers/static/${encodeURIComponent(archivo)}`);
-  audio.volume = 0.9;
-  audio.play().catch(() => {});
-  return audio;
+// Cuánto se espera antes de soltar un filler. El filler existe para tapar un silencio
+// incómodo, y desde que el turno se resuelve en ~25 ms casi nunca hay silencio que tapar:
+// lanzarlo siempre hacía que el "mmm, ya" sonara ENCIMA de la siguiente pregunta. Ahora
+// solo aparece si el agente de verdad se está tardando.
+const MS_ANTES_DEL_FILLER = 900;
+
+let fillerActual = null;
+let fillerTimeout = null;
+
+function programarFiller() {
+  cancelarFiller();
+  fillerTimeout = setTimeout(() => {
+    const archivo = FILLERS[Math.floor(Math.random() * FILLERS.length)];
+    fillerActual = new Audio(`/fillers/static/${encodeURIComponent(archivo)}`);
+    fillerActual.volume = 0.9;
+    fillerActual.play().catch(() => {});
+  }, MS_ANTES_DEL_FILLER);
+}
+
+function cancelarFiller() {
+  // Se corta tanto el temporizador (aún no sonó) como el audio en curso (ya empezó): sin
+  // lo segundo, un filler lanzado a los 900 ms seguía sonando bajo la respuesta que llegó
+  // a los 950 ms, y se oían las dos voces solapadas.
+  if (fillerTimeout) { clearTimeout(fillerTimeout); fillerTimeout = null; }
+  if (fillerActual) { fillerActual.pause(); fillerActual = null; }
 }
 
 function iniciarAnalisisAmplitud(source, onNivel) {
@@ -106,35 +128,65 @@ async function enviarAudio(blob) {
   orb.setState("thinking");
   $("estado-texto").textContent = "Pensando...";
   esperandoRespuesta = true;
-  reproducirFiller();
+  programarFiller();
 
   const arrayBuffer = await blob.arrayBuffer();
   ws.send(arrayBuffer);
 }
 
 function reproducirRespuesta(arrayBuffer) {
+  // Lo primero: callar cualquier muletilla. El agente va a hablar.
+  cancelarFiller();
+
   const blob = new Blob([arrayBuffer], { type: "audio/wav" });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
 
-  const source = audioCtx.createMediaElementSource(audio);
-  source.connect(audioCtx.destination);
-  const resultado = iniciarAnalisisAmplitud(source, (nivel) => orb.setAmplitude(nivel));
-  salidaAnalyser = resultado.analyser;
-  salidaRafId = resultado.rafId;
+  // El AudioContext se creaba solo al grabar, así que el primer audio del agente —la
+  // apertura, que suena ANTES de que el paciente hable— reventaba aquí con `audioCtx`
+  // todavía en null y la llamada arrancaba muda. Ahora se crea a demanda.
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  // Algunos navegadores lo dejan suspendido hasta que hay un gesto del usuario; el clic en
+  // "Iniciar llamada" cuenta, pero hay que reanudarlo explícitamente.
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+
+  // La visualización de amplitud es un adorno: si falla, el paciente tiene que oír al
+  // agente igual. Antes un error aquí se llevaba por delante la reproducción entera.
+  try {
+    const source = audioCtx.createMediaElementSource(audio);
+    source.connect(audioCtx.destination);
+    const resultado = iniciarAnalisisAmplitud(source, (nivel) => orb.setAmplitude(nivel));
+    salidaAnalyser = resultado.analyser;
+    salidaRafId = resultado.rafId;
+  } catch (err) {
+    console.warn("sin visualización de amplitud, se reproduce igual:", err);
+  }
 
   orb.setState("speaking");
   $("estado-texto").textContent = "Hablando...";
-  audio.play();
+  audio.play().catch((err) => {
+    // Si el navegador bloquea la reproducción automática, el turno no puede quedarse
+    // colgado esperando un `onended` que no va a llegar.
+    console.warn("no se pudo reproducir el audio:", err);
+    $("estado-texto").textContent = "Toca el micrófono para hablar";
+    $("boton-hablar").disabled = false;
+    esperandoRespuesta = false;
+  });
 
   audio.onended = () => {
     cancelAnimationFrame(salidaRafId);
     URL.revokeObjectURL(url);
     orb.setState("idle");
     orb.setAmplitude(0);
+    esperandoRespuesta = false;
+    if (llamadaFinalizada) {
+      $("estado-texto").textContent = "Llamada finalizada";
+      $("boton-hablar").disabled = true;
+      orb.setState("idle");
+      return;
+    }
     $("estado-texto").textContent = "Toca el micrófono para hablar";
     $("boton-hablar").disabled = false;
-    esperandoRespuesta = false;
   };
 }
 
@@ -145,18 +197,40 @@ function conectarWebSocket(pacienteId, procedimiento, diaPostop) {
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ paciente_id: pacienteId, procedimiento, dia_postop: diaPostop }));
-    $("boton-hablar").disabled = false;
+    // El botón NO se habilita aquí: el agente abre la llamada hablando, igual que una
+    // llamada de seguimiento real, y lo habilita el `onended` de esa apertura. Habilitarlo
+    // antes dejaba al paciente interrumpir al agente en su primera frase.
+    $("estado-texto").textContent = "Llamando...";
   };
 
   ws.onmessage = (event) => {
     if (typeof event.data === "string") {
       const datos = JSON.parse(event.data);
-      agregarTurno(datos.texto_paciente_transcrito, true);
+
+      // Anotación tardía: la clasificación del turno ANTERIOR, que se resolvió mientras el
+      // paciente ya escuchaba la pregunta siguiente. No es un turno de conversación —no
+      // lleva nada hablado— así que solo refresca el estado clínico del panel.
+      if (datos.tipo === "anotacion") {
+        actualizarCriticidad(datos.criticidad_final);
+        return;
+      }
+
+      // La apertura llega sin nada del paciente: sin esta guarda se pintaba una burbuja
+      // vacía a su nombre antes de que hubiera dicho una palabra.
+      if (datos.texto_paciente_transcrito) agregarTurno(datos.texto_paciente_transcrito, true);
       agregarTurno(datos.respuesta_hablada, false);
       actualizarCriticidad(datos.criticidad_final);
+      if (datos.llamada_finalizada) llamadaFinalizada = true;
     } else {
       reproducirRespuesta(event.data);
     }
+  };
+
+  ws.onclose = () => {
+    $("boton-hablar").disabled = true;
+    $("estado-texto").textContent = llamadaFinalizada
+      ? "Llamada finalizada"
+      : "Se cerró la conexión";
   };
 
   ws.onerror = () => {

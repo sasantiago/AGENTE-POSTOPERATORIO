@@ -74,3 +74,7 @@ class ResultadoTurno(BaseModel):
     cobertura: float = 0.0
     verde_bloqueado_por_cobertura: bool = False
     sbar: SBAR | None = None
+    # Traza auditable de la decisión: qué reglas se dispararon y cuál fijó el nivel
+    # (`clinical/triage.py:DecisionTriaje.to_dict`). Va al log y a la consola para que el
+    # escalamiento se pueda explicar sin leer el código.
+    decision_triaje: dict = Field(default_factory=dict)
