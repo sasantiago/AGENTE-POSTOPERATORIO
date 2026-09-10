@@ -20,7 +20,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from groq import RateLimitError
 
+from agente_postop.clients import ollama_vivo, precalentar_ollama
 from agente_postop.clinical.estado import EstadoClinicoLlamada, comparar_estados
+from agente_postop.config import get_settings
 from agente_postop.clinical.memory import (
     MotivoCierre,
     ResumenLlamada,
@@ -34,9 +36,13 @@ from agente_postop.clinical.pacientes import listar_pacientes
 from agente_postop.console.api import router as console_router
 from agente_postop.orchestrator.cortex import PROCEDIMIENTOS_OFRECIDOS
 from agente_postop.orchestrator.metrics import medir_turno
-from agente_postop.orchestrator.turn_manager import orquestar_turno
+from agente_postop.clinical.guion import APERTURA, siguiente_pregunta, texto_a_decir
+from agente_postop.clinical.triage import desde_estado
+from agente_postop.clinical.triage import evaluar as evaluar_triaje
+from agente_postop.orchestrator.turn_manager import cierre_para, orquestar_turno, orquestar_turno_guiado
 from agente_postop.rag.chroma_store import consultar
 from agente_postop.voice.stt_groq import transcribir
+from agente_postop.voice.guion_audio import audio_de, faltantes
 from agente_postop.voice.tts import sintetizar_wav
 
 MENSAJE_CUPO_AGOTADO = (
@@ -100,6 +106,26 @@ async def _ciclo_de_vida(_: FastAPI):
         logger.info("warm-up: modelo de embeddings y ChromaDB cargados")
     except Exception as exc:  # noqa: BLE001
         logger.warning("warm-up de RAG falló (el primer turno pagará la carga): %s", exc)
+
+    # Estado del modelo de lenguaje, dicho al arrancar y no en el primer turno del
+    # paciente. Que el agente descubra en vivo que no tiene con qué razonar es la peor
+    # forma de enterarse: el paciente ya está al teléfono.
+    settings = get_settings()
+    if settings.llm_backend == "ollama":
+        if await asyncio.to_thread(ollama_vivo):
+            # Una generación mínima deja el modelo cargado en memoria con el `keep_alive`
+            # configurado, para que el primer turno no pague los segundos de carga.
+            try:
+                await asyncio.to_thread(precalentar_ollama)
+                logger.info("warm-up: %s cargado en Ollama (local, sin credenciales)", settings.ollama_model)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Ollama responde pero el precalentado falló: %s", exc)
+        else:
+            logger.warning(
+                "Ollama no responde en %s o no tiene '%s' — la conversación caerá a '%s'. "
+                "Para el camino local: `ollama pull %s`",
+                settings.ollama_base_url, settings.ollama_model, settings.llm_fallback, settings.ollama_model,
+            )
     yield
 
 
@@ -170,6 +196,23 @@ class SesionLlamada:
     estado_clinico: EstadoClinicoLlamada = field(default_factory=EstadoClinicoLlamada)
     criticidad_maxima: Criticidad = Criticidad.VERDE
     ultimo_sbar: SBAR | None = None
+    # La pregunta del guion que el agente acaba de hacer y cuya respuesta espera. Es lo que
+    # permite extraer una sola dimensión en vez de las seis: si el agente preguntó por la
+    # herida, lo que llega es la respuesta sobre la herida.
+    pregunta_pendiente: object | None = None
+    llamada_cerrada: bool = False
+    # Dimensiones cuya clasificación corre en segundo plano. El guion las salta para no
+    # volver a preguntar algo que el paciente ya contestó y todavía se está anotando.
+    extracciones_en_vuelo: set = field(default_factory=set)
+    tareas_extraccion: list = field(default_factory=list)
+    # Un WebSocket no admite dos escrituras a la vez. Desde que la anotación corre en
+    # segundo plano hay DOS productores —el bucle del turno y la tarea diferida— y sin este
+    # cerrojo sus frames se intercalaban: el cliente recibía un audio partido por un JSON,
+    # se quedaba esperando el resto y la llamada se congelaba a los pocos turnos.
+    envio: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Ollama atiende una petición por vez. Sin limitar, cada turno encolaba otra extracción
+    # y la cola crecía más rápido de lo que se vaciaba.
+    turno_llm: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
 
     def historial_texto(self) -> str:
         return "\n".join(self.turnos[-6:]) if self.turnos else "(inicio de la llamada)"
@@ -228,6 +271,67 @@ def _guardar_memoria_sesion(sesion: SesionLlamada, motivo_cierre: MotivoCierre) 
 # todavia en camino. Se deja donde esta y el servidor no compite con el.
 
 
+def usar_guion() -> bool:
+    """¿Conduce el agente con guion fijo, o deja que el modelo redacte cada pregunta?
+
+    Configurable porque los dos caminos siguen vivos y son comparables: el guiado es el
+    que se entrega, y el libre queda para contrastar. Apagarlo no requiere tocar código.
+    """
+    return get_settings().usar_guion
+
+
+async def _anotar_en_segundo_plano(websocket: WebSocket, sesion: SesionLlamada, completar) -> None:
+    """Clasifica la respuesta del turno anterior mientras el paciente ya oyó la siguiente.
+
+    Es lo que convierte una espera de ~6 s en silencio en una anotación invisible. Cuando
+    termina, reevalúa la criticidad con el dato nuevo y le manda al panel una actualización;
+    la conversación no se interrumpe.
+
+    Si la clasificación falla, la dimensión sale de «en vuelo» y vuelve a la cola del guion:
+    el agente la preguntará otra vez más adelante. Un fallo aquí cuesta una repetición, no
+    un dato perdido.
+    """
+    dimension = completar.dimension
+    try:
+        # Una extracción por vez: Ollama las serializa igual, y encolarlas aquí evita que
+        # se apilen más rápido de lo que se resuelven.
+        async with sesion.turno_llm:
+            await asyncio.to_thread(completar)
+        decision = evaluar_triaje(
+            desde_estado(sesion.estado_clinico),
+            perfil=get_settings().triage_profile,
+            exigir_cobertura_para_verde=True,
+        )
+        if decision.nivel.rango > sesion.criticidad_maxima.rango:
+            sesion.criticidad_maxima = decision.nivel
+        async with sesion.envio:
+            await websocket.send_json({
+            "tipo": "anotacion",
+            "dimension": dimension,
+            "valor": str(getattr(sesion.estado_clinico, dimension).valor),
+            "confirmada": getattr(sesion.estado_clinico, dimension).confirmada,
+            "cobertura": sesion.estado_clinico.cobertura,
+            "criticidad_final": decision.nivel.value,
+            "decision_triaje": decision.to_dict(),
+        })
+    except Exception as exc:  # noqa: BLE001 — una anotación perdida no tumba la llamada
+        logger.warning("anotación diferida de %s falló: %s", dimension, exc)
+    finally:
+        sesion.extracciones_en_vuelo.discard(dimension)
+
+
+def _audio_de_texto(texto: str) -> bytes:
+    """El audio de una frase: pre-generado si es del guion, sintetizado si no.
+
+    Se intenta SIEMPRE el pre-generado, sin que quien llama tenga que saber si el texto es
+    de guion. Cuando lo es, el turno paga ~20 ms de lectura de disco en vez de ~1.000 ms de
+    Piper; cuando no —una respuesta anclada a la pregunta del paciente—, se sintetiza como
+    siempre. Que la frase mezcle ambas cosas también funciona: al no encontrarla completa
+    en caché, se sintetiza entera.
+    """
+    return audio_de(texto) or sintetizar_wav(texto)
+
+
 async def _cerrar_con_mensaje(websocket: WebSocket, texto_paciente: str, mensaje: str) -> None:
     """Cierra la llamada con un mensaje audible en vez de matar la conexión en silencio
     — un error (cupo de Groq agotado, falla técnica) no debe dejar al paciente esperando
@@ -243,6 +347,7 @@ async def _cerrar_con_mensaje(websocket: WebSocket, texto_paciente: str, mensaje
             "cobertura": 0.0,
             "verde_bloqueado_por_cobertura": False,
             "sbar": None,
+            "decision_triaje": {},
             "llamada_finalizada": True,
         }
     )
@@ -260,6 +365,29 @@ async def llamada(websocket: WebSocket):
         procedimiento=mensaje_inicial["procedimiento"],
         dia_postop=int(mensaje_inicial["dia_postop"]),
     )
+
+    # El agente abre la llamada: saluda y hace la primera pregunta del protocolo, sin
+    # esperar a que el paciente hable. Es como funciona una llamada de seguimiento real —
+    # llama el hospital, no el paciente— y de paso el primer turno del paciente ya llega
+    # como respuesta a una pregunta concreta, que es lo que hace barata la extracción.
+    if usar_guion():
+        sesion.pregunta_pendiente = siguiente_pregunta(sesion.estado_clinico)
+        apertura = f"{APERTURA} {texto_a_decir(sesion.pregunta_pendiente, sesion.estado_clinico)}"
+        sesion.turnos.append(f"agente: {apertura}")
+        async with sesion.envio:
+          await websocket.send_json({
+            "texto_paciente_transcrito": "",
+            "respuesta_hablada": apertura,
+            "criticidad_final": Criticidad.DESCONOCIDA.value,
+            "reflejo_vetea": False,
+            "afirmaciones_clinicas": [],
+            "cobertura": 0.0,
+            "verde_bloqueado_por_cobertura": False,
+            "sbar": None,
+            "decision_triaje": {},
+            "dimension_preguntada": sesion.pregunta_pendiente.dimension,
+          })
+          await websocket.send_bytes(await asyncio.to_thread(_audio_de_texto, apertura))
 
     try:
         while True:
@@ -298,22 +426,80 @@ async def llamada(websocket: WebSocket):
                     # event loop muerto mientras corría, y sin loop no hay forma de emitir
                     # nada al paciente durante la espera. Con el turno en un hilo, el
                     # filler de abajo puede salir a los 500 ms.
-                    tarea_turno = asyncio.create_task(
-                        asyncio.to_thread(
-                            partial(
-                                orquestar_turno,
-                                turno_paciente=texto_paciente,
-                                paciente_id=sesion.paciente_id,
-                                procedimiento=sesion.procedimiento,
-                                dia_postop=sesion.dia_postop,
-                                historial_turno=sesion.historial_texto(),
-                                estado_clinico=sesion.estado_clinico,
-                                turno_idx=turno_idx,
-                                es_primer_turno_de_la_llamada=es_primer_turno,
+                    if usar_guion():
+                        tarea_turno = asyncio.create_task(
+                            asyncio.to_thread(
+                                partial(
+                                    orquestar_turno_guiado,
+                                    turno_paciente=texto_paciente,
+                                    paciente_id=sesion.paciente_id,
+                                    procedimiento=sesion.procedimiento,
+                                    dia_postop=sesion.dia_postop,
+                                    estado_clinico=sesion.estado_clinico,
+                                    pregunta_pendiente=sesion.pregunta_pendiente,
+                                    turno_idx=turno_idx,
+                                    historial_turno=sesion.historial_texto(),
+                                    es_primer_turno_de_la_llamada=es_primer_turno,
+                                    # La clasificación categórica no bloquea la respuesta:
+                                    # el paciente oye la siguiente pregunta de inmediato y
+                                    # la anotación llega detrás. Lo que decide un
+                                    # escalamiento urgente —vía refleja, fiebre y dolor— ya
+                                    # se resolvió antes de llegar aquí, sin red.
+                                    diferir_extraccion=True,
+                                    en_vuelo=set(sesion.extracciones_en_vuelo),
+                                )
                             )
                         )
-                    )
-                    resultado = await tarea_turno
+                        resultado, siguiente, completar = await tarea_turno
+                        sesion.pregunta_pendiente = siguiente
+                        # Sin más preguntas, lo que acaba de decirse es el cierre: se
+                        # entrega el audio y se cuelga tras enviarlo. Pero antes hay que
+                        # esperar lo que siga anotándose, o la llamada se cerraría con el
+                        # estado clínico a medias.
+                        sesion.llamada_cerrada = siguiente is None
+                        if completar is not None:
+                            sesion.extracciones_en_vuelo.add(completar.dimension)
+                            sesion.tareas_extraccion.append(
+                                asyncio.create_task(_anotar_en_segundo_plano(websocket, sesion, completar))
+                            )
+                        if sesion.llamada_cerrada and sesion.tareas_extraccion:
+                            # Fin del guion. Aquí SÍ se espera: el desenlace de la llamada
+                            # no se puede decidir con anotaciones a medio llegar. Sin esto
+                            # el caso verde se cerraba con 67% de cobertura y el motor lo
+                            # degradaba a `desconocida` con razón — el verde exige evidencia
+                            # positiva de las seis dimensiones, no de cuatro.
+                            #
+                            # Es el único turno de la llamada que espera, y espera por un
+                            # motivo clínico, no técnico.
+                            await asyncio.gather(*sesion.tareas_extraccion, return_exceptions=True)
+                            decision_final = evaluar_triaje(
+                                desde_estado(sesion.estado_clinico),
+                                perfil=get_settings().triage_profile,
+                                exigir_cobertura_para_verde=True,
+                            )
+                            resultado = resultado.model_copy(update={
+                                "criticidad_final": decision_final.nivel,
+                                "respuesta_hablada": cierre_para(decision_final.nivel),
+                                "cobertura": sesion.estado_clinico.cobertura,
+                                "decision_triaje": decision_final.to_dict(),
+                            })
+                    else:
+                        tarea_turno = asyncio.create_task(
+                            asyncio.to_thread(
+                                partial(
+                                    orquestar_turno,
+                                    turno_paciente=texto_paciente,
+                                    paciente_id=sesion.paciente_id,
+                                    procedimiento=sesion.procedimiento,
+                                    dia_postop=sesion.dia_postop,
+                                    historial_turno=sesion.historial_texto(),
+                                    estado_clinico=sesion.estado_clinico,
+                                    turno_idx=turno_idx,
+                                    es_primer_turno_de_la_llamada=es_primer_turno,
+                                )
+                            )
+                        )
+                        resultado = await tarea_turno
             except RateLimitError:
                 logger.warning("cupo de Groq agotado — cerrando la llamada con aviso, paciente=%s", sesion.paciente_id)
                 await _cerrar_con_mensaje(websocket, texto_paciente, MENSAJE_CUPO_AGOTADO)
@@ -332,9 +518,10 @@ async def llamada(websocket: WebSocket):
                 sesion.ultimo_sbar = resultado.sbar
 
             with medicion.etapa("tts"):
-                audio_respuesta = await asyncio.to_thread(sintetizar_wav, resultado.respuesta_hablada)
+                audio_respuesta = await asyncio.to_thread(_audio_de_texto, resultado.respuesta_hablada)
 
-            await websocket.send_json(
+            async with sesion.envio:
+              await websocket.send_json(
                 {
                     "texto_paciente_transcrito": texto_paciente,
                     "respuesta_hablada": resultado.respuesta_hablada,
@@ -344,9 +531,17 @@ async def llamada(websocket: WebSocket):
                     "cobertura": resultado.cobertura,
                     "verde_bloqueado_por_cobertura": resultado.verde_bloqueado_por_cobertura,
                     "sbar": resultado.sbar.model_dump() if resultado.sbar else None,
+                    # Qué regla determinó la criticidad de este turno. Es lo que convierte
+                    # el panel en una caja de cristal: el operador ve "temperatura 38.4 °C
+                    # ≥ 38.0 °C", no un color sin explicación.
+                    "decision_triaje": resultado.decision_triaje,
+                    "dimension_preguntada": (
+                        sesion.pregunta_pendiente.dimension if sesion.pregunta_pendiente else None
+                    ),
+                    "llamada_finalizada": sesion.llamada_cerrada,
                 }
-            )
-            await websocket.send_bytes(audio_respuesta)
+              )
+              await websocket.send_bytes(audio_respuesta)
             medicion.marcar_audio_de_respuesta()
 
             # Una línea por turno, con las etapas desglosadas. Es lo que permite contrastar
@@ -354,12 +549,24 @@ async def llamada(websocket: WebSocket):
             # (§4, "Repositorio, proceso y buenas prácticas") pide justamente que las
             # métricas reportadas sean verificables en los logs.
             logger.info(
-                "turno paciente=%s criticidad=%s %s",
+                "turno paciente=%s criticidad=%s regla=%s %s",
                 sesion.paciente_id,
                 resultado.criticidad_final.value,
+                # La regla que fijó el nivel va en la misma línea que la latencia: sin
+                # ella, un log de escalamientos no permite reconstruir por qué se escaló.
+                resultado.decision_triaje.get("escalado_por") or "-",
                 medicion.como_linea_log(),
             )
             medicion_cm.__exit__(None, None, None)
+
+            if sesion.llamada_cerrada:
+                # El guion terminó: ya se dijo el cierre y su audio salió. Se guarda la
+                # memoria longitudinal ANTES de cerrar el socket, porque el `except
+                # WebSocketDisconnect` de abajo no llega a correr cuando quien cuelga es
+                # el servidor.
+                _guardar_memoria_sesion(sesion, MotivoCierre.COMPLETADA)
+                await websocket.close()
+                return
 
     except WebSocketDisconnect:
         _guardar_memoria_sesion(sesion, MotivoCierre.COMPLETADA)
