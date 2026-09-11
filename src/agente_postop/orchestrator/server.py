@@ -210,6 +210,11 @@ class SesionLlamada:
     # cerrojo sus frames se intercalaban: el cliente recibía un audio partido por un JSON,
     # se quedaba esperando el resto y la llamada se congelaba a los pocos turnos.
     envio: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # El socket sigue abierto. Las anotaciones corren en segundo plano y pueden terminar
+    # DESPUÉS de que la llamada se cierre o el paciente cuelgue; escribir entonces lanza
+    # «Unexpected ASGI message 'websocket.send', after sending 'websocket.close'», visto en
+    # una llamada real. El dato sí se anota: lo único que se omite es avisar al panel.
+    socket_vivo: bool = True
     # Ollama atiende una petición por vez. Sin limitar, cada turno encolaba otra extracción
     # y la cola crecía más rápido de lo que se vaciaba.
     turno_llm: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
@@ -304,6 +309,8 @@ async def _anotar_en_segundo_plano(websocket: WebSocket, sesion: SesionLlamada, 
         )
         if decision.nivel.rango > sesion.criticidad_maxima.rango:
             sesion.criticidad_maxima = decision.nivel
+        if not sesion.socket_vivo:
+            return  # la llamada ya terminó; el estado quedó anotado, no hay a quién avisar
         async with sesion.envio:
             await websocket.send_json({
             "tipo": "anotacion",
@@ -504,11 +511,13 @@ async def llamada(websocket: WebSocket):
                         resultado = await tarea_turno
             except RateLimitError:
                 logger.warning("cupo de Groq agotado — cerrando la llamada con aviso, paciente=%s", sesion.paciente_id)
+                sesion.socket_vivo = False
                 await _cerrar_con_mensaje(websocket, texto_paciente, MENSAJE_CUPO_AGOTADO)
                 _guardar_memoria_sesion(sesion, MotivoCierre.ERROR_TECNICO)
                 return
             except Exception as exc:  # noqa: BLE001 — cualquier falla del turno cuelga avisando, no en silencio
                 logger.exception("error inesperado procesando el turno, paciente=%s: %s", sesion.paciente_id, exc)
+                sesion.socket_vivo = False
                 await _cerrar_con_mensaje(websocket, texto_paciente, MENSAJE_ERROR_TECNICO)
                 _guardar_memoria_sesion(sesion, MotivoCierre.ERROR_TECNICO)
                 return
@@ -577,9 +586,13 @@ async def llamada(websocket: WebSocket):
                 # memoria longitudinal ANTES de cerrar el socket, porque el `except
                 # WebSocketDisconnect` de abajo no llega a correr cuando quien cuelga es
                 # el servidor.
+                sesion.socket_vivo = False
                 _guardar_memoria_sesion(sesion, MotivoCierre.COMPLETADA)
                 await websocket.close()
                 return
 
     except WebSocketDisconnect:
+        # El paciente colgó o recargó la página. Las anotaciones en vuelo siguen su curso
+        # y se anotan en el estado; simplemente ya no tienen a quién avisar.
+        sesion.socket_vivo = False
         _guardar_memoria_sesion(sesion, MotivoCierre.COMPLETADA)
