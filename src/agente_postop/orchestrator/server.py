@@ -555,13 +555,19 @@ async def llamada(websocket: WebSocket):
             # lo que dice el README contra lo que pasó de verdad en la sesión — la rúbrica
             # (§4, "Repositorio, proceso y buenas prácticas") pide justamente que las
             # métricas reportadas sean verificables en los logs.
+            # La transcripción va al log, no solo las latencias. Sin ella un fallo de la
+            # llamada es indiagnosticable: se ve que el agente repite una pregunta pero no
+            # QUÉ oyó, que es donde está siempre la causa. Se recorta porque el log es una
+            # línea por turno, no un transcriptor.
             logger.info(
-                "turno paciente=%s criticidad=%s regla=%s %s",
+                "turno paciente=%s criticidad=%s regla=%s dijo=%r respondio=%r %s",
                 sesion.paciente_id,
                 resultado.criticidad_final.value,
                 # La regla que fijó el nivel va en la misma línea que la latencia: sin
                 # ella, un log de escalamientos no permite reconstruir por qué se escaló.
                 resultado.decision_triaje.get("escalado_por") or "-",
+                texto_paciente[:90],
+                resultado.respuesta_hablada[:70],
                 medicion.como_linea_log(),
             )
             medicion_cm.__exit__(None, None, None)

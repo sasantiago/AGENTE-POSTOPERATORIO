@@ -157,6 +157,29 @@ async function enviarAudio(blob) {
   ws.send(arrayBuffer);
 }
 
+// Margen sobre la duración del audio antes de devolverle el turno al paciente por la
+// fuerza. Existe porque `onended` es la ÚNICA vía por la que se rehabilita el micrófono, y
+// si no llega —el navegador no decodifica el formato, el AudioContext quedó suspendido, la
+// pestaña pasó a segundo plano— la llamada se queda muerta con el botón gris y sin ningún
+// error en consola. Es exactamente el fallo que se veía como «se quedó pegado».
+const MARGEN_FIN_AUDIO_MS = 2000;
+
+function devolverTurnoAlPaciente(motivo) {
+  if (!esperandoRespuesta && !$("boton-hablar").disabled) return;  // ya estaba libre
+  if (motivo) console.warn("turno devuelto al paciente:", motivo);
+  cancelAnimationFrame(salidaRafId);
+  esperandoRespuesta = false;
+  orb.setState("idle");
+  orb.setAmplitude(0);
+  if (llamadaFinalizada) {
+    $("estado-texto").textContent = "Llamada finalizada";
+    $("boton-hablar").disabled = true;
+    return;
+  }
+  $("estado-texto").textContent = "Toca el micrófono para hablar";
+  $("boton-hablar").disabled = false;
+}
+
 function reproducirRespuesta(arrayBuffer) {
   // Lo primero: callar cualquier muletilla. El agente va a hablar.
   cancelarFiller();
@@ -190,30 +213,25 @@ function reproducirRespuesta(arrayBuffer) {
 
   orb.setState("speaking");
   $("estado-texto").textContent = "Hablando...";
-  audio.play().catch((err) => {
-    // Si el navegador bloquea la reproducción automática, el turno no puede quedarse
-    // colgado esperando un `onended` que no va a llegar.
-    console.warn("no se pudo reproducir el audio:", err);
-    $("estado-texto").textContent = "Toca el micrófono para hablar";
-    $("boton-hablar").disabled = false;
-    esperandoRespuesta = false;
+
+  let reloj = null;
+  const terminar = (motivo) => {
+    if (reloj) { clearTimeout(reloj); reloj = null; }
+    URL.revokeObjectURL(url);
+    devolverTurnoAlPaciente(motivo);
+  };
+
+  // En cuanto se conoce la duración real se arma el cinturón de seguridad. `loadedmetadata`
+  // llega antes de que empiece a sonar, así que el reloj cubre la reproducción entera.
+  audio.addEventListener("loadedmetadata", () => {
+    const ms = (Number.isFinite(audio.duration) ? audio.duration * 1000 : 15000) + MARGEN_FIN_AUDIO_MS;
+    reloj = setTimeout(() => terminar(`el audio no avisó de su fin en ${Math.round(ms)} ms`), ms);
   });
 
-  audio.onended = () => {
-    cancelAnimationFrame(salidaRafId);
-    URL.revokeObjectURL(url);
-    orb.setState("idle");
-    orb.setAmplitude(0);
-    esperandoRespuesta = false;
-    if (llamadaFinalizada) {
-      $("estado-texto").textContent = "Llamada finalizada";
-      $("boton-hablar").disabled = true;
-      orb.setState("idle");
-      return;
-    }
-    $("estado-texto").textContent = "Toca el micrófono para hablar";
-    $("boton-hablar").disabled = false;
-  };
+  audio.onended = () => terminar(null);
+  audio.onerror = () => terminar("el navegador no pudo decodificar el audio");
+
+  audio.play().catch((err) => terminar(`reproducción bloqueada: ${err.name}`));
 }
 
 function conectarWebSocket(pacienteId, procedimiento, diaPostop) {
