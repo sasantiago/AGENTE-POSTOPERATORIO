@@ -23,6 +23,8 @@ let esperandoRespuesta = false;
 // El agente colgó al terminar el protocolo. Distingue un cierre normal de una caída de
 // conexión, que para el paciente se ven igual y significan cosas muy distintas.
 let llamadaFinalizada = false;
+// Formato del audio que viene en camino. Lo anuncia el turno anterior al binario.
+let formatoAudio = "audio/wav";
 
 function agregarTurno(texto, esPaciente) {
   const div = document.createElement("div");
@@ -86,7 +88,26 @@ function iniciarAnalisisAmplitud(source, onNivel) {
 }
 
 async function iniciarGrabacion() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  // `getUserMedia` falla si el paciente niega el permiso, si el equipo no tiene micrófono,
+  // o si la página no se sirve desde un contexto seguro. Sin capturarlo, la promesa se
+  // rechazaba en silencio, el `mouseup` deshabilitaba el botón y la llamada quedaba muerta
+  // sin decir por qué: el paciente ve un botón gris y no tiene forma de saber que el
+  // problema es un permiso.
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    console.warn("no se pudo abrir el micrófono:", err);
+    orb.setState("idle");
+    $("estado-texto").textContent =
+      err.name === "NotAllowedError"
+        ? "Permite el micrófono en el navegador para poder hablar"
+        : "No se encontró micrófono — revisa tu equipo";
+    $("boton-hablar").classList.remove("grabando");
+    $("boton-hablar").disabled = false;
+    return;
+  }
+
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const micSource = audioCtx.createMediaStreamSource(stream);
   const resultado = iniciarAnalisisAmplitud(micSource, (nivel) => orb.setAmplitude(nivel));
@@ -117,11 +138,13 @@ async function iniciarGrabacion() {
 }
 
 function detenerGrabacion() {
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    mediaRecorder.stop();
-  }
+  const grabando = mediaRecorder && mediaRecorder.state === "recording";
+  if (grabando) mediaRecorder.stop();
   $("boton-hablar").classList.remove("grabando");
-  $("boton-hablar").disabled = true;
+  // Solo se bloquea si de verdad se envió algo y toca esperar la respuesta. Si nunca
+  // arrancó la grabación —micrófono denegado, pulsación fallida— el paciente tiene que
+  // poder volver a intentarlo.
+  $("boton-hablar").disabled = grabando;
 }
 
 async function enviarAudio(blob) {
@@ -138,7 +161,10 @@ function reproducirRespuesta(arrayBuffer) {
   // Lo primero: callar cualquier muletilla. El agente va a hablar.
   cancelarFiller();
 
-  const blob = new Blob([arrayBuffer], { type: "audio/wav" });
+  // El formato lo dice el servidor en el JSON que precede al audio: Piper manda WAV y Edge
+  // TTS manda MP3. Fijarlo a "audio/wav" hacía que el navegador se negara a reproducir el
+  // MP3 de la voz colombiana.
+  const blob = new Blob([arrayBuffer], { type: formatoAudio });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
 
@@ -210,6 +236,8 @@ function conectarWebSocket(pacienteId, procedimiento, diaPostop) {
       // Anotación tardía: la clasificación del turno ANTERIOR, que se resolvió mientras el
       // paciente ya escuchaba la pregunta siguiente. No es un turno de conversación —no
       // lleva nada hablado— así que solo refresca el estado clínico del panel.
+      if (datos.formato_audio) formatoAudio = datos.formato_audio;
+
       if (datos.tipo === "anotacion") {
         actualizarCriticidad(datos.criticidad_final);
         return;
@@ -220,6 +248,7 @@ function conectarWebSocket(pacienteId, procedimiento, diaPostop) {
       if (datos.texto_paciente_transcrito) agregarTurno(datos.texto_paciente_transcrito, true);
       agregarTurno(datos.respuesta_hablada, false);
       actualizarCriticidad(datos.criticidad_final);
+      if (datos.formato_audio) formatoAudio = datos.formato_audio;
       if (datos.llamada_finalizada) llamadaFinalizada = true;
     } else {
       reproducirRespuesta(event.data);

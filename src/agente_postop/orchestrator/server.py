@@ -43,7 +43,7 @@ from agente_postop.orchestrator.turn_manager import cierre_para, orquestar_turno
 from agente_postop.rag.chroma_store import consultar
 from agente_postop.voice.stt_groq import transcribir
 from agente_postop.voice.guion_audio import audio_de, faltantes
-from agente_postop.voice.tts import sintetizar_wav
+from agente_postop.voice.tts import sintetizar, sintetizar_wav
 
 MENSAJE_CUPO_AGOTADO = (
     "Se me acabó el tiempo disponible por ahora — alguien del equipo lo va a contactar "
@@ -320,7 +320,7 @@ async def _anotar_en_segundo_plano(websocket: WebSocket, sesion: SesionLlamada, 
         sesion.extracciones_en_vuelo.discard(dimension)
 
 
-def _audio_de_texto(texto: str) -> bytes:
+def _audio_de_texto(texto: str) -> tuple[bytes, str]:
     """El audio de una frase: pre-generado si es del guion, sintetizado si no.
 
     Se intenta SIEMPRE el pre-generado, sin que quien llama tenga que saber si el texto es
@@ -329,7 +329,7 @@ def _audio_de_texto(texto: str) -> bytes:
     siempre. Que la frase mezcle ambas cosas también funciona: al no encontrarla completa
     en caché, se sintetiza entera.
     """
-    return audio_de(texto) or sintetizar_wav(texto)
+    return audio_de(texto) or sintetizar(texto)
 
 
 async def _cerrar_con_mensaje(websocket: WebSocket, texto_paciente: str, mensaje: str) -> None:
@@ -374,6 +374,7 @@ async def llamada(websocket: WebSocket):
         sesion.pregunta_pendiente = siguiente_pregunta(sesion.estado_clinico)
         apertura = f"{APERTURA} {texto_a_decir(sesion.pregunta_pendiente, sesion.estado_clinico)}"
         sesion.turnos.append(f"agente: {apertura}")
+        audio_apertura, formato_apertura = await asyncio.to_thread(_audio_de_texto, apertura)
         async with sesion.envio:
           await websocket.send_json({
             "texto_paciente_transcrito": "",
@@ -386,8 +387,9 @@ async def llamada(websocket: WebSocket):
             "sbar": None,
             "decision_triaje": {},
             "dimension_preguntada": sesion.pregunta_pendiente.dimension,
+            "formato_audio": formato_apertura,
           })
-          await websocket.send_bytes(await asyncio.to_thread(_audio_de_texto, apertura))
+          await websocket.send_bytes(audio_apertura)
 
     try:
         while True:
@@ -518,7 +520,9 @@ async def llamada(websocket: WebSocket):
                 sesion.ultimo_sbar = resultado.sbar
 
             with medicion.etapa("tts"):
-                audio_respuesta = await asyncio.to_thread(_audio_de_texto, resultado.respuesta_hablada)
+                audio_respuesta, formato_audio = await asyncio.to_thread(
+                    _audio_de_texto, resultado.respuesta_hablada
+                )
 
             async with sesion.envio:
               await websocket.send_json(
@@ -539,6 +543,9 @@ async def llamada(websocket: WebSocket):
                         sesion.pregunta_pendiente.dimension if sesion.pregunta_pendiente else None
                     ),
                     "llamada_finalizada": sesion.llamada_cerrada,
+                    # Piper devuelve WAV y Edge MP3: el navegador reproduce los dos, pero
+                    # necesita saber cuál le llega para construir el Blob.
+                    "formato_audio": formato_audio,
                 }
               )
               await websocket.send_bytes(audio_respuesta)

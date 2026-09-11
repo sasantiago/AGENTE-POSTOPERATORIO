@@ -119,6 +119,13 @@ class Settings(BaseSettings):
     groq_llm_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_LLM_MODEL")
     groq_stt_model: str = Field(default="whisper-large-v3", alias="GROQ_STT_MODEL")
 
+    @field_validator("tts_backend")
+    @classmethod
+    def _tts_valido(cls, v: str) -> str:
+        if v not in {"edge", "piper"}:
+            raise ValueError(f"TTS_BACKEND '{v}' desconocido; use 'edge' o 'piper'")
+        return v
+
     @field_validator("llm_backend", "llm_fallback")
     @classmethod
     def _backend_valido(cls, v: str) -> str:
@@ -193,6 +200,18 @@ class Settings(BaseSettings):
     chroma_persist_dir: Path = Field(default=PROJECT_ROOT / "data" / "chroma", alias="CHROMA_PERSIST_DIR")
     vault_dir: Path = Field(default=PROJECT_ROOT / "vault", alias="VAULT_DIR")
     dataset_dir: Path = Field(default=PROJECT_ROOT / "dataset", alias="DATASET_DIR")
+
+    # --- Voz ------------------------------------------------------------------------
+    #
+    # `edge` usa Microsoft Edge TTS con una voz colombiana neuronal; `piper` es la síntesis
+    # local. Ninguno pide credenciales, así que la solución sigue arrancando sin una sola
+    # clave de API. La diferencia es el acento: Piper solo publica voces `es_MX` y `es_ES`,
+    # y a un paciente colombiano le hablaba alguien de otro país.
+    #
+    # Edge depende de un servicio que nadie ha contratado y puede cortarse sin aviso, así
+    # que Piper se conserva y entra solo con que el otro falle. Sin conexión, `piper`.
+    tts_backend: str = Field(default="edge", alias="TTS_BACKEND")
+    edge_voz: str = Field(default="es-CO-SalomeNeural", alias="EDGE_VOZ")
 
     piper_voice_model: Path = Field(
         default=PROJECT_ROOT / "data" / "voices" / "es_voice.onnx", alias="PIPER_VOICE_MODEL"

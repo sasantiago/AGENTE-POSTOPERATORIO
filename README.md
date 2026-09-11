@@ -28,7 +28,7 @@ Contexto del reto, reglas de evaluación y dataset original: [`docs/reto-origina
 | LLM (conversación y extracción) | **Llama 3.2 3B en local, vía Ollama** | Cumple G3 (familia Meta Llama local, serie 3.x 1B–3B). Sin credenciales, sin cupos, sin depender de que un proveedor lo siga sirviendo — ver "Por qué local" |
 | LLM (respaldo) | Gemini Flash | Cumple G3 (familia Google Gemini, gama Flash). Entra solo si Ollama no responde, para que una llamada no muera por no tener modelo |
 | STT | Groq Whisper Large V3 | `whisper-large-v3` sigue disponible en el nivel gratuito y es lo único que se le pide a Groq |
-| TTS | Piper (voz `es_MX`, local) | Local, gratis, sin límite de minutos. Se evaluó Kokoro-82M y se descartó: Piper sintetiza la respuesta completa en ~1s en CPU (medido), suficiente para el turno |
+| TTS | **Edge TTS, voz `es-CO-SalomeNeural`** · Piper local de respaldo | Voz colombiana neuronal, sin credenciales. Piper solo publica `es_MX` y `es_ES`: a un paciente colombiano le hablaba alguien de otro país. Se conserva como respaldo y para el modo sin conexión (`TTS_BACKEND=piper`). Cambiar de voz no cuesta latencia porque el guion va pre-sintetizado |
 | RAG | ChromaDB + `multilingual-e5-base` (búsqueda híbrida: vectorial + BM25) | Local, gratis; e5-base (~1.1GB) en vez de BGE-M3 (4.3GB) para no comprometer la compuerta de 15 minutos — BM25 recupera el margen de precisión en términos exactos (dosis, fármacos) que un embedding más chico puede difuminar |
 | Ingesta | Docling | Un solo camino a Markdown para cualquier archivo, con OCR |
 | Orquestación | FastAPI + WebSocket | Streaming bidireccional de audio y turnos |

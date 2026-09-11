@@ -23,6 +23,11 @@ watchdog==6.0.0
 soundfile==0.12.1
 numpy==2.2.1
 piper-tts==1.6.0
+# Voz colombiana neuronal (es-CO-SalomeNeural), sin credenciales. El mínimo NO es
+# arbitrario: Microsoft rota un token de autenticación (Sec-MS-GEC) y bloquea a los
+# clientes viejos — con 7.0.0 el servicio responde 403 y la síntesis falla en silencio.
+# Piper se conserva como respaldo y para el modo sin conexión.
+edge-tts>=7.2.8
 
 # Utilidades
 httpx==0.28.1
